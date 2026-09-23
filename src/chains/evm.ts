@@ -170,7 +170,11 @@ export class EvmChain {
     return this.primary.getBalance({ address: address as Hex });
   }
 
+  /** ETH for on-screen sentences: at most 6 decimals, trailing zeros dropped (fees are otherwise 15 digits long). */
   static fmt(wei: bigint): string {
-    return formatEther(wei);
+    const micro = 10n ** 12n;
+    const rounded = ((wei + micro / 2n) / micro) * micro;
+    if (rounded === 0n && wei > 0n) return "less than 0.000001";
+    return formatEther(rounded);
   }
 }

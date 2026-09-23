@@ -35,7 +35,7 @@ Comment style: start with `NEXT PERSON:` and say what to do, not what happened.
 
 ## Gate
 
-Before every push: `npm test` and `npm run typecheck` must pass. CI runs the same on every push (`.github/workflows/ci.yml`). One push at a time, read before edit.
+Before every push: `npm test`, `npm run typecheck`, and `npm run build:web` must pass. CI runs the same on every push (`.github/workflows/ci.yml`). One push at a time, read before edit.
 
 ## Plain English rule
 

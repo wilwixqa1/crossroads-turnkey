@@ -12,7 +12,8 @@ Users hold one balance that spans chains. Trades and transfers settle instantly 
 | Vault | Owns deposit addresses and signs withdrawals. Local stand-in now; Turnkey in Phase 1 | `src/signer/` |
 | Chains | Finds deposits (two providers must agree), sends withdrawals, reports real fees | `src/chains/` |
 | App | Wires the above together and runs the background loops | `src/app.ts` |
-| Server | JSON API and the web page | `src/server.ts`, `public/` |
+| Server | JSON API and serves the page | `src/server.ts`, `public/` |
+| Page | Trading page: balances, Deposit/Swap/Send/Withdraw, activity feed, Under the hood | `web/` (bundled to `public/app.js`) |
 
 ## Run it on a laptop
 
@@ -22,11 +23,11 @@ cp .env.example .env
 npm run dev
 ```
 
-Open http://localhost:8080. Tests: `npm test`.
+Open http://localhost:8080. `npm run dev` bundles the page once; run `npm run dev:web` alongside it to rebuild the page on every change. Tests: `npm test`.
 
 ## Status
 
-Phase 2 groundwork: ledger, request signing, deposit scanning, and withdrawal flow, all against Sepolia and Base Sepolia public endpoints with a stand-in vault. The Turnkey vault, passkey sign-up, the trading page, and the ROFL packaging follow the phase plan in the project's Scope of Work.
+Phase 2 on a laptop: ledger, signed requests, deposit scanning, withdrawals, and the trading page, with a stand-in login and a stand-in vault. The Turnkey vault, passkey sign-up, and the ROFL packaging follow the phase plan in the project's Scope of Work.
 
 ## Working on this repo
 

@@ -267,6 +267,8 @@ export class App {
           break;
         }
       }
+      // NEXT PERSON: this funds check runs before the vault is asked to sign, so "Try to break it" only reaches
+      // the vault's policy when one vault address really holds more than the cap plus fee on that chain.
       if (!from) {
         this.ledger.failWithdrawal(w.id, "No single vault address holds enough on this chain");
         this.log({ source: "ledger", account: w.account, text: `Withdrawal #${w.id} not sent: no single vault address holds enough on ${chainName} (needs rebalancing). Funds unlocked.` });

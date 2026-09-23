@@ -2,6 +2,8 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { english, generateMnemonic } from "viem/accounts";
 import { App, WITHDRAWAL_CAP } from "./app.js";
 import { LocalVault, type Vault } from "./signer/index.js";
 import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
@@ -15,11 +17,24 @@ const PORT = Number(process.env.PORT ?? 8080);
 const VAULT_MODE = process.env.VAULT_MODE ?? "local";
 const LIQUIDITY_PROVIDER = process.env.LIQUIDITY_PROVIDER?.trim().toLowerCase() || undefined;
 
+/**
+ * The stand-in vault's key phrase: made once at random and kept beside the saved state. A fixed phrase
+ * would put every deposit address in public view (the well-known test phrases are swept by bots on
+ * public testnets), and a fresh state folder gets a fresh phrase automatically.
+ */
+function localMnemonic(): string {
+  const path = join(dirname(STATE_PATH), "local-vault-mnemonic.txt");
+  if (existsSync(path)) return readFileSync(path, "utf8").trim();
+  const phrase = generateMnemonic(english);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, phrase + "\n", { mode: 0o600 });
+  return phrase;
+}
+
 function buildVault(): Vault {
   const mode = VAULT_MODE;
   if (mode === "local") {
-    const mnemonic = process.env.LOCAL_VAULT_MNEMONIC;
-    if (!mnemonic) throw new Error("LOCAL_VAULT_MNEMONIC is required in local mode (stand-in only; never real funds)");
+    const mnemonic = process.env.LOCAL_VAULT_MNEMONIC?.trim() || localMnemonic();
     const known = loadState(STATE_PATH)?.ledger.accounts ?? {};
     return new LocalVault(mnemonic, Object.values(known).map((a) => a.depositAddress), WITHDRAWAL_CAP);
   }

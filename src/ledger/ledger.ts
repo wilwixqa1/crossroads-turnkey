@@ -252,7 +252,7 @@ export class Ledger {
     if (acct.balances[asset].available < total) throw new LedgerError("Insufficient available balance for amount plus fee", "INSUFFICIENT");
     acct.balances[asset].available -= total;
     acct.balances[asset].pending += total;
-    const id = `w_${Date.now()}_${Object.keys(this.state.withdrawals).length + 1}`;
+    const id = String(Object.keys(this.state.withdrawals).length + 1); // shown on screen as "withdrawal #3"
     const w: Withdrawal = {
       id,
       account: acct.id,

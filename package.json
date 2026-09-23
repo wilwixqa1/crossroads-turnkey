@@ -4,11 +4,13 @@
   "description": "Crossroads-style chain-abstracted exchange: Turnkey signs, an Oasis ROFL app keeps the ledger",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "node dist/server.js",
-    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build:web && tsx watch --env-file-if-exists=.env src/server.ts",
+    "dev:web": "npm run build:web -- --watch",
+    "build:web": "esbuild web/main.ts --bundle --format=esm --target=es2022 --sourcemap --outfile=public/app.js",
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "build": "tsc -p tsconfig.json && npm run build:web",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p web/tsconfig.json"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"

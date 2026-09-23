@@ -147,7 +147,7 @@ export class App {
         const chain = this.chains.get(asset)!;
         const fee = await chain.estimateWithdrawalFee();
         const w = this.ledger.requestWithdrawal(acct.id, asset, amount, fee, p.destination);
-        this.log({ source: "ledger", account: acct.id, text: `Locked ${EvmChain.fmt(amount)} ETH plus a ${EvmChain.fmt(fee)} ETH fee reserve for withdrawal ${w.id}. Nothing is signed until the funds are locked.` });
+        this.log({ source: "ledger", account: acct.id, text: `Locked ${EvmChain.fmt(amount)} ETH plus a ${EvmChain.fmt(fee)} ETH fee reserve for withdrawal #${w.id}. Nothing is signed until the funds are locked.` });
         return { ok: true, withdrawalId: w.id, feeReserved: fee.toString() };
       }
       default:
@@ -269,25 +269,25 @@ export class App {
       }
       if (!from) {
         this.ledger.failWithdrawal(w.id, "No single vault address holds enough on this chain");
-        this.log({ source: "ledger", account: w.account, text: `Withdrawal ${w.id} not sent: no single vault address holds enough on ${chainName} (needs rebalancing). Funds unlocked.` });
+        this.log({ source: "ledger", account: w.account, text: `Withdrawal #${w.id} not sent: no single vault address holds enough on ${chainName} (needs rebalancing). Funds unlocked.` });
         return;
       }
       const sent = await chain.sendWithdrawal(this.vault, from, w.destination, w.amount);
       const ms = Math.round(performance.now() - t0);
       this.ledger.markWithdrawalSent(w.id, sent.fromAddress, sent.txHash, sent.nonce);
       if (sent.broadcastError) {
-        this.log({ source: "chain", account: w.account, text: `${this.vault.label} signed withdrawal ${w.id}, but ${chainName} reported an error on broadcast (${sent.broadcastError}). Funds stay locked until it confirms or is dropped.`, link: chain.cfg.explorerTx(sent.txHash) });
+        this.log({ source: "chain", account: w.account, text: `${this.vault.label} signed withdrawal #${w.id}, but ${chainName} reported an error on broadcast (${sent.broadcastError}). Funds stay locked until it confirms or is dropped.`, link: chain.cfg.explorerTx(sent.txHash) });
       } else {
-        this.log({ source: "turnkey", account: w.account, text: `${this.vault.label} checked its policy and signed withdrawal ${w.id} from ${from}. Broadcast to ${chainName}.`, ms, link: chain.cfg.explorerTx(sent.txHash) });
+        this.log({ source: "turnkey", account: w.account, text: `${this.vault.label} checked its policy and signed withdrawal #${w.id} from ${from}. Broadcast to ${chainName}.`, ms, link: chain.cfg.explorerTx(sent.txHash) });
       }
     } catch (err) {
       // Nothing was signed on any path that reaches here, so unlocking cannot double-spend.
       const msg = (err as Error).message;
       this.ledger.failWithdrawal(w.id, msg);
       if (err instanceof VaultRefusal) {
-        this.log({ source: "turnkey", account: w.account, text: `${this.vault.label} refused to sign withdrawal ${w.id}: ${msg}. Funds unlocked.`, ms: Math.round(performance.now() - t0) });
+        this.log({ source: "turnkey", account: w.account, text: `${this.vault.label} refused to sign withdrawal #${w.id}: ${msg}. Funds unlocked.`, ms: Math.round(performance.now() - t0) });
       } else {
-        this.log({ source: "chain", account: w.account, text: `Withdrawal ${w.id} not sent: ${msg}. Funds unlocked.` });
+        this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} not sent: ${msg}. Funds unlocked.` });
       }
     } finally {
       this.save();
@@ -302,16 +302,16 @@ export class App {
       if (w.nonce === undefined || Date.now() - w.updatedAt < App.DROP_GRACE_MS) return;
       if (!(await chain.wasDropped(w.txHash!, w.fromAddress!, w.nonce))) return;
       this.ledger.failWithdrawal(w.id, "transaction dropped");
-      this.log({ source: "chain", account: w.account, text: `Withdrawal ${w.id} never reached the chain and another transaction used its slot, so it can no longer land. Funds unlocked.` });
+      this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} never reached the chain and another transaction used its slot, so it can no longer land. Funds unlocked.` });
       this.save();
       return;
     }
     if (res.success) {
       this.ledger.completeWithdrawal(w.id, res.feeActual);
-      this.log({ source: "chain", account: w.account, text: `Withdrawal ${w.id} confirmed. Real fee ${EvmChain.fmt(res.feeActual)} ETH, unused reserve refunded.`, link: chain.cfg.explorerTx(w.txHash!) });
+      this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} confirmed. Real fee ${EvmChain.fmt(res.feeActual)} ETH, unused reserve refunded.`, link: chain.cfg.explorerTx(w.txHash!) });
     } else {
       this.ledger.failWithdrawal(w.id, "transaction reverted");
-      this.log({ source: "chain", account: w.account, text: `Withdrawal ${w.id} reverted on-chain. Funds unlocked.` });
+      this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} reverted on-chain. Funds unlocked.` });
     }
     this.save();
   }

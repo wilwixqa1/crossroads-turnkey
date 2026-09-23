@@ -20,7 +20,14 @@ Paste a GitHub token, say "T02, continue from docs/sessions/T01_CONTEXT.md", and
 ## Waiting on Will (Phase 0)
 Turnkey org + parent API key (blocks Phase 1), Sepolia and Base Sepolia test ETH, Oasis testnet tokens, Docker Hub account, Docker + Oasis CLI, network provider keys.
 
-## Gotchas for the next session
+## Code comments added at close-out (insert-only, 10 lines added, 0 removed)
+- src/signer/index.ts: mnemonic must match saved state; use a fresh STATE_PATH to change it
+- src/app.ts: deposit scan starts at the tip on first run
+- src/app.ts: bypassAppCap is for Try to break it only
+- src/server.ts: every bigint leaves the API as a decimal string
+- src/ledger/ledger.ts: a failed request still burns its sequence number
+
+## Gotchas for the next session (same facts, for a reader who starts here)
 - `LocalVault` re-derives addresses from the mnemonic in order at startup and fails loudly if the mnemonic does not match saved state. Change the mnemonic only with a fresh STATE_PATH.
 - Deposit scanning starts at the current tip on first run; it does not replay history. Fund an address only after the app is running, or lower the cursor by hand.
 - The app's per-withdrawal cap is a first gate; the request param `bypassAppCap=true` exists only so "Try to break it" can reach Turnkey's policy. Never expose it in the normal UI path.

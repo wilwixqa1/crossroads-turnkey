@@ -13,6 +13,17 @@ Borrowed from the SimpleBlueprints workflow, trimmed for a one-week project.
   4. Present the context file to Will.
 - Re-export the Claude Doc SoW to `docs/SOW.md` at close-out if it changed.
 
+## Code comments: rules that make the step actually happen
+
+The comments step is the only close-out step with no artifact of its own, which is why it gets skipped, and comment edits are where real code has gone missing before. Four rules:
+
+1. Write the comment when the gotcha is found, during the session. Close-out only verifies the comments exist.
+2. Insert-only edits: find one unique existing line, replace it with the comment plus that identical line. The old text is contained in the new text, so nothing can be deleted.
+3. Commit comments on their own with a message starting `comments:`. The gate (`tools/check_comment_commit.sh`) fails such a commit if it removes a single line.
+4. Close-out step 1 is done only when the context file lists each comment with its location and the diff summary shows zero lines removed.
+
+Comment style: start with `NEXT PERSON:` and say what to do, not what happened.
+
 ## Where knowledge lives (one place each)
 
 - `docs/SOW.md`: the design. Why things are the way they are.

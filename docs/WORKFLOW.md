@@ -17,7 +17,8 @@ Borrowed from the SimpleBlueprints workflow, trimmed for a one-week project.
 
 The comments step is the only close-out step with no artifact of its own, which is why it gets skipped, and comment edits are where real code has gone missing before. Four rules:
 
-1. Write the comment when the gotcha is found, during the session. Close-out only verifies the comments exist.
+1. Write the comment when the gotcha is found, during the session. Close-out only verifies the question was considered.
+   The bar: a fact the next session would otherwise trip over, placed where they would be standing when it matters. "None needed" is a normal and common answer. A comment that restates what the code plainly does makes future sessions slower, not faster, and should be removed.
 2. Insert-only edits: find one unique existing line, replace it with the comment plus that identical line. The old text is contained in the new text, so nothing can be deleted.
 3. Commit comments on their own with a message starting `comments:`. The gate (`tools/check_comment_commit.sh`) fails such a commit if it removes a single line.
 4. Close-out step 1 is done only when the context file has a `## Code comments` section listing each comment with its location (or saying none were needed) and the diff summary shows zero lines removed. The gate (`tools/check_context_file.sh`) fails if the newest context file lacks that section.

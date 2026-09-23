@@ -8,7 +8,10 @@
 - Reviewed the Liquefaction and Crossroads papers and both public repos; wrote and revised the SoW.
 - Design decisions made this session: ledger lives in the ROFL app (no smart contracts); Turnkey plays two roles (per-user passkey wallets and an app-owned encumbered vault); per-user deposit addresses instead of deposit tagging; Solana deferred, Base Sepolia is the second chain; withdrawals run in parallel across vault addresses; every user request carries a sequence number.
 - Built the backend skeleton: ledger with 9 tests, signed requests, EVM deposit scanning with two-provider agreement, withdrawal flow, local stand-in vault, Fastify server, placeholder page. Ran it live against Sepolia and Base Sepolia public endpoints.
-- Created this repo (private) and pushed.
+- Created this repo and pushed. Will made it public at the end of T01 so GitHub Actions runs free; the CI gate is green on main.
+
+## How to start T02
+Paste a GitHub token, say "T02, continue from docs/sessions/T01_CONTEXT.md", and Claude clones the repo and reads docs/SOW.md, docs/BACKLOG.md, and this file.
 
 ## What is next (see docs/BACKLOG.md)
 1. Trading page with stand-in login.

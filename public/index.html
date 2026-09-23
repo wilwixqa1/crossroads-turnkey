@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crossroads on Turnkey</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#1a1a1a}
+  code{font-family:ui-monospace,monospace;background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}
+  .muted{color:#666}
+</style>
+</head>
+<body>
+<h1>Crossroads on Turnkey</h1>
+<p class="muted">Backend skeleton is running. The trading page arrives in Phase 2.</p>
+<p>Status: <code id="s">loading…</code></p>
+<script>
+fetch('/api/status').then(r=>r.json()).then(j=>{document.getElementById('s').textContent=JSON.stringify(j)}).catch(e=>{document.getElementById('s').textContent=String(e)});
+</script>
+</body>
+</html>

@@ -160,7 +160,11 @@ function renderShell() {
         <button type="button" class="link" id="theme"></button>
       </div>
     </header>
-    ${s.mode === "local" ? `<p class="standin">Stand-in mode: your login key lives in this browser and the vault keys live in the app. Turnkey takes over both in Phases 1 and 2b.</p>` : ""}
+    <p class="standin">${
+      s.mode === "local"
+        ? "Stand-in mode: your login key lives in this browser and the vault keys live in the app. Turnkey takes over both in Phases 1 and 2b."
+        : "The vault is Turnkey. The login is still a stand-in: your key lives in this browser until passkey wallets arrive in Phase 2b."
+    }</p>
     <p class="offline" id="offline" hidden>Cannot reach the app. Retrying.</p>
     <div class="layout">
       <main class="trade">

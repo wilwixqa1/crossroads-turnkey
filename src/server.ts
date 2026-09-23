@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { english, generateMnemonic } from "viem/accounts";
 import { App, WITHDRAWAL_CAP } from "./app.js";
 import { LocalVault, type Vault } from "./signer/index.js";
+import { TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId } from "./signer/turnkey.js";
 import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor } from "./chains/config.js";
@@ -31,17 +32,30 @@ function localMnemonic(): string {
   return phrase;
 }
 
-function buildVault(): Vault {
+async function buildVault(): Promise<Vault> {
   const mode = VAULT_MODE;
+  const known = Object.values(loadState(STATE_PATH)?.ledger.accounts ?? {}).map((a) => a.depositAddress);
   if (mode === "local") {
     const mnemonic = process.env.LOCAL_VAULT_MNEMONIC?.trim() || localMnemonic();
-    const known = loadState(STATE_PATH)?.ledger.accounts ?? {};
-    return new LocalVault(mnemonic, Object.values(known).map((a) => a.depositAddress), WITHDRAWAL_CAP);
+    return new LocalVault(mnemonic, known, WITHDRAWAL_CAP);
   }
-  throw new Error(`VAULT_MODE=${mode} not implemented yet (Turnkey vault arrives in Phase 1)`);
+  if (mode === "turnkey") {
+    const dir = dirname(STATE_PATH);
+    const organizationId = process.env.TURNKEY_VAULT_ORG_ID?.trim() || readVaultOrgId(dir);
+    if (!organizationId) throw new Error("No Turnkey vault yet: run `npm run turnkey:setup` first");
+    const vault = await TurnkeyVault.open(
+      { organizationId, keys: loadOrCreateAppKeys(dir), cap: WITHDRAWAL_CAP, chainIds: CHAINS.map((c) => c.chain.id) },
+      (line) => console.log(line),
+    );
+    const held = new Set(await vault.addresses());
+    const stray = known.filter((a) => !held.has(a));
+    if (stray.length) throw new Error(`The saved ledger has ${stray.length} deposit address(es) this Turnkey vault does not hold. Use a fresh STATE_PATH for a new vault.`);
+    return vault;
+  }
+  throw new Error(`Unknown VAULT_MODE=${mode} (use local or turnkey)`);
 }
 
-const app = new App(buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER });
+const app = new App(await buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER });
 const server = Fastify({ logger: false });
 
 // Serialize bigint anywhere in a response.

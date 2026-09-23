@@ -20,7 +20,7 @@ The comments step is the only close-out step with no artifact of its own, which 
 1. Write the comment when the gotcha is found, during the session. Close-out only verifies the comments exist.
 2. Insert-only edits: find one unique existing line, replace it with the comment plus that identical line. The old text is contained in the new text, so nothing can be deleted.
 3. Commit comments on their own with a message starting `comments:`. The gate (`tools/check_comment_commit.sh`) fails such a commit if it removes a single line.
-4. Close-out step 1 is done only when the context file lists each comment with its location and the diff summary shows zero lines removed.
+4. Close-out step 1 is done only when the context file has a `## Code comments` section listing each comment with its location (or saying none were needed) and the diff summary shows zero lines removed. The gate (`tools/check_context_file.sh`) fails if the newest context file lacks that section.
 
 Comment style: start with `NEXT PERSON:` and say what to do, not what happened.
 

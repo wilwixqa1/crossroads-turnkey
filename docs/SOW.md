@@ -265,7 +265,7 @@ One page for trading, a narration panel beside it, and a separate proof page, de
 6. **Proof (1 min):** open the proof page. Show that the only key holder for the vault is the attested app, show the signer's policies, then show Will's own Turnkey dashboard failing to sign.
 7. **Close (30 s):** "Move the app from ROFL to Turnkey Verifiable Cloud and the whole thing runs on Turnkey. Solana is one more address in the vault."
 
-**Before each demo:** pre-fund a second test account, confirm the ROFL machine rental has hours remaining, and check the Turnkey signature count.
+**Before each demo:** pre-fund a second test account, confirm the ROFL machine rental has hours remaining, check the Turnkey signature count, and make sure the account that presses Try to break it has at least 0.07 Sepolia ETH deposited, because the app locks the funds before it asks Turnkey to sign.
 
 ## Build phases and timeline
 

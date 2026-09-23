@@ -45,6 +45,8 @@ export function apiKeyFromRaw(raw: Uint8Array): ApiKeyPair {
 }
 
 /** The app's two Turnkey keys on a laptop: made once and kept beside the saved state, never in git. */
+// NEXT PERSON: lose this file and the vault can never sign again; that is encumbrance working. A Claude workspace is
+// wiped at session end, so a vault set up there is throwaway: never send it more than small test amounts.
 export function loadOrCreateAppKeys(dir: string): AppKeys {
   const path = join(dir, "turnkey-app-keys.json");
   if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8")) as AppKeys;
@@ -164,6 +166,8 @@ export class TurnkeyVault implements Vault {
       log(`Created the signer user (${this.signerUserId}) with no powers except its policies`);
     }
 
+    // NEXT PERSON: policies are matched by name only. Changing the cap or the chains leaves the old conditions in
+    // Turnkey; to change them, set up a fresh vault (new STATE_PATH folder) rather than editing these strings.
     const { policies } = await this.admin.getPolicies(this.org);
     const have = new Set(policies.map((p) => p.policyName));
     const missing = signerPolicies(this.signerUserId, this.walletId, this.cfg.cap, this.cfg.chainIds).filter((p) => !have.has(p.policyName));

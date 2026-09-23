@@ -103,6 +103,8 @@ export class App {
       }
       case "withdraw": {
         const amount = BigInt(p.amount);
+        // NEXT PERSON: the app cap is the first gate; Turnkey's policy is the second. bypassAppCap exists
+        // only so the "Try to break it" button can reach Turnkey's refusal. Never set it from the normal UI path.
         if (amount > WITHDRAWAL_CAP) {
           // Deliberately let "Try to break it" through to Turnkey? No: the ledger refuses first unless the request says so.
           if (p.bypassAppCap !== "true") throw new LedgerError("Above the app's per-withdrawal cap", "CAP");
@@ -127,6 +129,8 @@ export class App {
     try {
       const chain = this.chains.get(asset)!;
       const head = await chain.confirmedHead();
+      // NEXT PERSON: first run starts at the current tip, so deposits made before the app was running are
+      // never seen. Fund addresses only after startup, or set scanCursor lower by hand in the state file.
       const from = this.scanCursor[asset] ?? head; // first run: start at the tip, do not replay history
       if (head <= from) return;
       // Cap catch-up so a long pause does not scan thousands of blocks at once.

@@ -28,6 +28,8 @@ const app = new App(buildVault(), STATE_PATH);
 const server = Fastify({ logger: false });
 
 // Serialize bigint anywhere in a response.
+// NEXT PERSON: every bigint leaves the API as a decimal string. The page must never do arithmetic on
+// these as JS numbers; parse to BigInt (or send back the string untouched).
 server.setReplySerializer((payload) => JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
 
 server.register(fastifyStatic, { root: join(here, "..", "public"), prefix: "/" });

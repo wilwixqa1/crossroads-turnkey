@@ -27,6 +27,8 @@ export class LocalVault implements Vault {
   constructor(private mnemonic: string, existingAddresses: string[] = []) {
     // Re-derive any addresses the ledger already knows so restarts keep working.
     this.nextIndex = 0;
+    // NEXT PERSON: addresses are re-derived in creation order from the mnemonic. Changing the mnemonic
+    // with an existing STATE_PATH fails on purpose; use a fresh STATE_PATH instead.
     for (const addr of existingAddresses) {
       const acct = mnemonicToAccount(mnemonic, { addressIndex: this.nextIndex++ });
       if (acct.address.toLowerCase() !== addr.toLowerCase()) throw new Error(`Local vault mnemonic does not match ledger address ${addr}`);

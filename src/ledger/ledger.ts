@@ -152,6 +152,8 @@ export class Ledger {
    * number; on success the number advances so the same signed request can never
    * be applied twice.
    */
+  // NEXT PERSON: consumeSeq runs before the action is applied, so a request that fails validation still
+  // burns its number. Clients must re-fetch nextSeq after any error rather than retry the same seq.
   consumeSeq(accountId: string, seq: number) {
     const acct = this.getAccount(accountId);
     if (seq !== acct.nextSeq) {

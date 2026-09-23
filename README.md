@@ -27,3 +27,7 @@ Open http://localhost:8080. Tests: `npm test`.
 ## Status
 
 Phase 2 groundwork: ledger, request signing, deposit scanning, and withdrawal flow, all against Sepolia and Base Sepolia public endpoints with a stand-in vault. The Turnkey vault, passkey sign-up, the trading page, and the ROFL packaging follow the phase plan in the project's Scope of Work.
+
+## Working on this repo
+
+Design: `docs/SOW.md`. Work queue: `docs/BACKLOG.md`. Process: `docs/WORKFLOW.md`. Session handoffs: `docs/sessions/`.

@@ -10,7 +10,7 @@
  * Withdrawals: build a plain transfer with the vault address's current nonce,
  * hand it to the Vault to sign, broadcast, and later report the real fee.
  */
-import { createPublicClient, http, formatEther, type PublicClient, type Hex, type TransactionSerializable } from "viem";
+import { createPublicClient, http, formatEther, keccak256, type PublicClient, type Hex, type TransactionSerializable } from "viem";
 import type { ChainConfig } from "./config.js";
 import type { Vault } from "../signer/index.js";
 
@@ -26,7 +26,18 @@ export interface FoundDeposit {
 export interface SentWithdrawal {
   txHash: string;
   fromAddress: string;
+  nonce: number;
+  /** Set when the network errored on broadcast. The transaction may still land, so funds must stay locked. */
+  broadcastError?: string;
 }
+
+export type WithdrawalResult =
+  | { state: "unknown" }
+  | { state: "unconfirmed" }
+  | { state: "done"; feeActual: bigint; success: boolean };
+
+/** The vault (Turnkey, or the stand-in) declined to sign. Distinct from network errors so the UI can say who refused. */
+export class VaultRefusal extends Error {}
 
 export class EvmChain {
   readonly clients: PublicClient[];
@@ -43,17 +54,18 @@ export class EvmChain {
     return this.clients[1];
   }
 
-  /** Highest block number old enough to be treated as confirmed. */
-  async confirmedHead(): Promise<bigint> {
-    const head = await this.primary.getBlockNumber();
-    return head - BigInt(this.cfg.confirmations);
+  /** Newest block the primary provider knows about. Blocks at or below `latest - confirmations` count as confirmed. */
+  async latestHead(): Promise<bigint> {
+    return this.primary.getBlockNumber();
   }
 
   /**
    * Scan blocks (from, to] for ETH transfers into any watched address, and
-   * cross-check each with the second provider.
+   * cross-check each with the second provider. With crossCheck=false the scan is
+   * only a heads-up for the page ("deposit seen, waiting for confirmations") and
+   * must never be used to credit the ledger.
    */
-  async scanDeposits(fromBlockExclusive: bigint, toBlockInclusive: bigint, watched: Set<string>): Promise<FoundDeposit[]> {
+  async scanDeposits(fromBlockExclusive: bigint, toBlockInclusive: bigint, watched: Set<string>, crossCheck = true): Promise<FoundDeposit[]> {
     const found: FoundDeposit[] = [];
     if (watched.size === 0) return found;
     for (let n = fromBlockExclusive + 1n; n <= toBlockInclusive; n++) {
@@ -63,8 +75,7 @@ export class EvmChain {
         if (!tx.to || tx.value === 0n) continue;
         const to = tx.to.toLowerCase();
         if (!watched.has(to)) continue;
-        const ok = await this.crossCheck(tx.hash, to, tx.value);
-        if (!ok) continue;
+        if (crossCheck && !(await this.crossCheck(tx.hash, to, tx.value))) continue;
         found.push({ asset: this.cfg.asset, txHash: tx.hash, to, from: tx.from.toLowerCase(), amount: tx.value, blockNumber: n });
       }
     }
@@ -91,7 +102,11 @@ export class EvmChain {
     return perGas * 21_000n * 2n; // 2x headroom; unused reserve is refunded on completion
   }
 
-  /** Build, sign (via the vault), and broadcast a withdrawal. */
+  /**
+   * Build, sign (via the vault), and broadcast a withdrawal. Throws VaultRefusal if the vault will not
+   * sign; nothing has been signed in that case. Once signed, this never throws: a broadcast error is
+   * returned instead, because the transaction may still reach the chain.
+   */
   async sendWithdrawal(vault: Vault, fromAddress: string, to: string, amount: bigint): Promise<SentWithdrawal> {
     const [nonce, fees] = await Promise.all([
       this.primary.getTransactionCount({ address: fromAddress as Hex, blockTag: "pending" }),
@@ -107,20 +122,47 @@ export class EvmChain {
       maxFeePerGas: fees.maxFeePerGas,
       maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
     };
-    const signed = await vault.signTransaction(fromAddress, tx);
-    const txHash = await this.primary.sendRawTransaction({ serializedTransaction: signed });
-    return { txHash, fromAddress };
+    let signed: Hex;
+    try {
+      signed = await vault.signTransaction(fromAddress, tx);
+    } catch (err) {
+      throw new VaultRefusal((err as Error).message);
+    }
+    const txHash = keccak256(signed);
+    try {
+      await this.primary.sendRawTransaction({ serializedTransaction: signed });
+      return { txHash, fromAddress, nonce };
+    } catch (err) {
+      return { txHash, fromAddress, nonce, broadcastError: (err as Error).message };
+    }
   }
 
-  /** Returns the real fee once the transaction is mined and confirmed, or null if not yet. */
-  async withdrawalResult(txHash: string): Promise<{ feeActual: bigint; success: boolean } | null> {
+  /** Where a sent withdrawal stands. Network errors throw; only "no receipt yet" is reported as unknown. */
+  async withdrawalResult(txHash: string): Promise<WithdrawalResult> {
+    const receipt = await this.receipt(this.primary, txHash);
+    if (!receipt) return { state: "unknown" };
+    const head = await this.primary.getBlockNumber();
+    if (head - receipt.blockNumber < BigInt(this.cfg.confirmations)) return { state: "unconfirmed" };
+    return { state: "done", feeActual: receipt.gasUsed * receipt.effectiveGasPrice, success: receipt.status === "success" };
+  }
+
+  /**
+   * True when the address has already used this transaction number on-chain but neither provider has a
+   * receipt for our transaction: another transaction took its place, so ours can never land.
+   */
+  async wasDropped(txHash: string, fromAddress: string, nonce: number): Promise<boolean> {
+    const mined = await this.primary.getTransactionCount({ address: fromAddress as Hex, blockTag: "latest" });
+    if (mined <= nonce) return false;
+    for (const client of [this.primary, this.secondary]) if (await this.receipt(client, txHash)) return false;
+    return true;
+  }
+
+  private async receipt(client: PublicClient, txHash: string) {
     try {
-      const receipt = await this.primary.getTransactionReceipt({ hash: txHash as Hex });
-      const head = await this.primary.getBlockNumber();
-      if (head - receipt.blockNumber < BigInt(this.cfg.confirmations)) return null;
-      return { feeActual: receipt.gasUsed * receipt.effectiveGasPrice, success: receipt.status === "success" };
-    } catch {
-      return null;
+      return await client.getTransactionReceipt({ hash: txHash as Hex });
+    } catch (err) {
+      if ((err as Error).name === "TransactionReceiptNotFoundError") return null;
+      throw err;
     }
   }
 

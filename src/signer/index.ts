@@ -9,22 +9,29 @@
  * The rest of the app only talks to this interface, so swapping them is one line.
  */
 import { mnemonicToAccount, type HDAccount } from "viem/accounts";
-import type { Hex, TransactionSerializable } from "viem";
+import { formatEther, type Hex, type TransactionSerializable } from "viem";
 
 export interface Vault {
   /** Create a fresh deposit address (valid on every EVM chain). */
   newDepositAddress(): Promise<string>;
   /** Sign a fully specified transaction for the given vault address. Returns the signed, serialized transaction. */
   signTransaction(fromAddress: string, tx: TransactionSerializable): Promise<Hex>;
+  /** Short name used in "Under the hood" sentences, e.g. "Turnkey" or "Stand-in vault". */
+  readonly label: string;
   /** Human description for the "Under the hood" panel. */
   describe(): string;
 }
 
 export class LocalVault implements Vault {
+  readonly label = "Stand-in vault";
   private accounts = new Map<string, HDAccount>();
   private nextIndex: number;
 
-  constructor(private mnemonic: string, existingAddresses: string[] = []) {
+  /**
+   * @param cap Per-transaction limit the stand-in enforces, imitating the Turnkey signer policy, so the
+   *            "Try to break it" path can be exercised on a laptop without sending an over-cap withdrawal.
+   */
+  constructor(private mnemonic: string, existingAddresses: string[] = [], private cap?: bigint) {
     // Re-derive any addresses the ledger already knows so restarts keep working.
     this.nextIndex = 0;
     // NEXT PERSON: addresses are re-derived in creation order from the mnemonic. Changing the mnemonic
@@ -45,6 +52,9 @@ export class LocalVault implements Vault {
   async signTransaction(fromAddress: string, tx: TransactionSerializable): Promise<Hex> {
     const acct = this.accounts.get(fromAddress.toLowerCase());
     if (!acct) throw new Error(`Local vault does not hold ${fromAddress}`);
+    if (this.cap !== undefined && (tx.value ?? 0n) > this.cap) {
+      throw new Error(`Policy refused: ${formatEther(tx.value ?? 0n)} ETH is above the ${formatEther(this.cap)} ETH per-withdrawal cap (stand-in for Turnkey's policy)`);
+    }
     return acct.signTransaction(tx);
   }
 

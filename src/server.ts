@@ -4,27 +4,29 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { App, WITHDRAWAL_CAP } from "./app.js";
 import { LocalVault, type Vault } from "./signer/index.js";
-import { LedgerError, ASSETS, type Asset } from "./ledger/ledger.js";
+import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
-import { CHAINS } from "./chains/config.js";
+import { CHAINS, chainFor } from "./chains/config.js";
 import { loadState } from "./storage/state.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = process.env.STATE_PATH ?? join(process.cwd(), "data", "state.json");
 const PORT = Number(process.env.PORT ?? 8080);
+const VAULT_MODE = process.env.VAULT_MODE ?? "local";
+const LIQUIDITY_PROVIDER = process.env.LIQUIDITY_PROVIDER?.trim().toLowerCase() || undefined;
 
 function buildVault(): Vault {
-  const mode = process.env.VAULT_MODE ?? "local";
+  const mode = VAULT_MODE;
   if (mode === "local") {
     const mnemonic = process.env.LOCAL_VAULT_MNEMONIC;
     if (!mnemonic) throw new Error("LOCAL_VAULT_MNEMONIC is required in local mode (stand-in only; never real funds)");
     const known = loadState(STATE_PATH)?.ledger.accounts ?? {};
-    return new LocalVault(mnemonic, Object.values(known).map((a) => a.depositAddress));
+    return new LocalVault(mnemonic, Object.values(known).map((a) => a.depositAddress), WITHDRAWAL_CAP);
   }
   throw new Error(`VAULT_MODE=${mode} not implemented yet (Turnkey vault arrives in Phase 1)`);
 }
 
-const app = new App(buildVault(), STATE_PATH);
+const app = new App(buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER });
 const server = Fastify({ logger: false });
 
 // Serialize bigint anywhere in a response.
@@ -41,13 +43,24 @@ server.setErrorHandler((rawErr, _req, reply) => {
 });
 
 server.get("/api/status", async () => ({
+  mode: VAULT_MODE,
   vault: app.vault.describe(),
+  vaultLabel: app.vault.label,
   assets: ASSETS,
-  chains: CHAINS.map((c) => ({ asset: c.asset, chainId: c.chain.id, name: c.chain.name, confirmations: c.confirmations })),
+  chains: CHAINS.map((c) => ({ asset: c.asset, chainId: c.chain.id, name: c.chain.name, confirmations: c.confirmations, head: app.heads[c.asset] ?? null })),
   withdrawalCap: WITHDRAWAL_CAP.toString(),
+  liquidityProvider: LIQUIDITY_PROVIDER ?? null,
   pool: app.ledger.state.pool.reserves,
   accounts: Object.keys(app.ledger.state.accounts).length,
 }));
+
+/** Adds display names and an explorer link so the page never has to look either up. */
+function decorate(e: LedgerEvent) {
+  const nameOf = (id: unknown) => (typeof id === "string" ? app.ledger.state.accounts[id]?.name : undefined);
+  const txHash = typeof e.detail.txHash === "string" ? e.detail.txHash : undefined;
+  const asset = (e.detail.asset ?? app.ledger.state.withdrawals[String(e.detail.withdrawalId)]?.asset) as Asset | undefined;
+  return { ...e, fromName: nameOf(e.account), toName: nameOf(e.detail.to), link: txHash && asset ? chainFor(asset).explorerTx(txHash) : undefined };
+}
 
 server.post<{ Body: { id: string; name: string } }>("/api/accounts", async (req) => {
   const { id, name } = req.body;
@@ -58,7 +71,12 @@ server.post<{ Body: { id: string; name: string } }>("/api/accounts", async (req)
 
 server.get<{ Params: { id: string } }>("/api/accounts/:id", async (req) => {
   const acct = app.ledger.getAccount(req.params.id);
-  return { ...acct, events: app.ledger.eventsFor(acct.id) };
+  const withdrawals = Object.values(app.ledger.state.withdrawals)
+    .filter((w) => w.account === acct.id)
+    .slice(-20)
+    .reverse()
+    .map((w) => ({ ...w, link: w.txHash ? chainFor(w.asset).explorerTx(w.txHash) : undefined }));
+  return { ...acct, events: app.ledger.eventsFor(acct.id).map(decorate), withdrawals, incoming: app.incomingFor(acct.id) };
 });
 
 /** The exact text a client must sign for a request; keeps client and server in step. */

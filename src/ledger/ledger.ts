@@ -42,6 +42,8 @@ export interface Withdrawal {
   status: WithdrawalStatus;
   fromAddress?: string;
   txHash?: string;
+  /** Transaction number used on the vault address; lets the app tell a dropped transaction from a slow one. */
+  nonce?: number;
   createdAt: number;
   updatedAt: number;
   error?: string;
@@ -267,12 +269,13 @@ export class Ledger {
     return w;
   }
 
-  markWithdrawalSent(id: string, fromAddress: string, txHash: string) {
+  markWithdrawalSent(id: string, fromAddress: string, txHash: string, nonce?: number) {
     const w = this.getWithdrawal(id);
     if (w.status !== "pending") throw new LedgerError(`Withdrawal is ${w.status}`, "BAD_STATE");
     w.status = "sent";
     w.fromAddress = fromAddress.toLowerCase();
     w.txHash = txHash;
+    w.nonce = nonce;
     w.updatedAt = Date.now();
     this.emit({ kind: "withdraw_sent", account: w.account, settlement: "onchain", detail: { withdrawalId: id, txHash, fromAddress: w.fromAddress } });
   }

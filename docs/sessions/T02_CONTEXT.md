@@ -64,8 +64,11 @@ Its app keys lived in this session's workspace, which is wiped at session end. I
    - runs `oasis rofl create/update/deploy` with a deploy wallet whose key is a GitHub repo secret.
    Will funds that wallet with TEST from MetaMask. The deploy wallet becomes the ROFL app admin. The laptop backup becomes a recorded rehearsal.
 
-## How to start T03
-Paste a GitHub token, say "T03, continue from docs/sessions/T02_CONTEXT.md", and Claude clones the repo and reads docs/SOW.md, docs/BACKLOG.md, and this file. For Turnkey work, also paste Will's org ID and parent API key; they are not stored anywhere.
+## How session 3 starts
+Will pastes this file and says "let's begin session 3". Claude then:
+1. clones github.com/wilwixqa1/crossroads-turnkey (public, so no token is needed to read it);
+2. reads docs/SOW.md and docs/BACKLOG.md;
+3. asks Will, only when needed, for a GitHub token (to push) and his Turnkey org ID and API key (for setup). Neither is stored anywhere.
 
 ## What is next (suggested T03 order)
 1. The deploy workflow, and a first deploy of the current app. This is also the ROFL smoke test.

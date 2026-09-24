@@ -67,6 +67,45 @@ export function writeVaultOrgId(dir: string, organizationId: string) {
   writeFileSync(join(dir, "turnkey-vault.json"), JSON.stringify({ organizationId }, null, 2) + "\n");
 }
 
+/** The vault sub-organization: its only root user is the app's admin key, and it has no email or phone anywhere. */
+export function vaultSubOrgParams(parentOrgId: string, adminPublicKey: string) {
+  return {
+    organizationId: parentOrgId,
+    subOrganizationName: `Crossroads vault ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
+    rootUsers: [{ userName: ADMIN_USER_NAME, apiKeys: [{ apiKeyName: "app-admin-key", publicKey: adminPublicKey, curveType: "API_KEY_CURVE_P256" as const }], authenticators: [], oauthProviders: [] }],
+    rootQuorumThreshold: 1,
+    // No email or phone anywhere in the vault, so there is nothing for parent-initiated recovery to use.
+    disableEmailRecovery: true,
+    disableEmailAuth: true,
+    disableSmsAuth: true,
+    disableOtpEmailAuth: true,
+  };
+}
+
+/**
+ * The vault's sub-organization ID: remembered beside STATE_PATH; after a move to a new machine, found again by asking
+ * Turnkey which sub-organization the admin key belongs to; on the very first start, created by the app itself with its
+ * sign-up key, so the vault's only root user is a key that was generated in the enclave and never left it.
+ */
+export async function findOrCreateVault(parentOrgId: string, keys: { admin: ApiKeyPair; signup: ApiKeyPair }, dir: string, log: (line: string) => void): Promise<string> {
+  const known = readVaultOrgId(dir);
+  if (known) return known;
+  try {
+    const me = await turnkeyClient(keys.admin, parentOrgId).getWhoami({ organizationId: parentOrgId });
+    if (me.organizationId && me.organizationId !== parentOrgId) {
+      writeVaultOrgId(dir, me.organizationId);
+      log(`Found this app's existing Turnkey vault ${me.organizationId} by its admin key`);
+      return me.organizationId;
+    }
+  } catch {
+    // The admin key is not a user anywhere yet: first start.
+  }
+  const res = await turnkeyClient(keys.signup, parentOrgId).createSubOrganization(vaultSubOrgParams(parentOrgId, keys.admin.publicKey));
+  writeVaultOrgId(dir, res.subOrganizationId);
+  log(`Created the Turnkey vault ${res.subOrganizationId}; its only root user is this app's admin key`);
+  return res.subOrganizationId;
+}
+
 export interface PolicySpec {
   policyName: string;
   effect: "EFFECT_ALLOW" | "EFFECT_DENY";
@@ -127,7 +166,7 @@ export class TurnkeyVault implements Vault {
   /** Deposit addresses are created one at a time so two sign-ups never claim the same wallet path. */
   private queue: Promise<unknown> = Promise.resolve();
 
-  private constructor(readonly cfg: TurnkeyVaultConfig) {
+  constructor(readonly cfg: TurnkeyVaultConfig) {
     this.admin = cfg.clients?.admin ?? turnkeyClient(cfg.keys.admin, cfg.organizationId);
     this.signer = cfg.clients?.signer ?? turnkeyClient(cfg.keys.signer, cfg.organizationId);
   }

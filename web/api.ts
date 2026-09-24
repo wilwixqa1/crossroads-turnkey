@@ -22,6 +22,9 @@ export interface Status {
   liquidityProvider: string | null;
   pool: Record<Asset, string>;
   accounts: number;
+  vaultReady: boolean;
+  appKeys: { source: "rofl" | "file"; vaultAdmin: string; vaultSigner: string; signup: string } | null;
+  roflAppId: string | null;
   login: { mode: "google" | "standin"; googleClientId: string | null; signupPublicKey: string | null; sessionSeconds: number };
 }
 

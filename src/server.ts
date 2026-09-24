@@ -5,13 +5,14 @@ import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { english, generateMnemonic } from "viem/accounts";
 import { App, WITHDRAWAL_CAP } from "./app.js";
-import { LocalVault, type Vault } from "./signer/index.js";
-import { TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId } from "./signer/turnkey.js";
+import { LocalVault, PendingVault, type Vault } from "./signer/index.js";
+import { TurnkeyVault, findOrCreateVault, readVaultOrgId } from "./signer/turnkey.js";
+import { loadAppKeys, roflAppId } from "./signer/keys.js";
 import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor } from "./chains/config.js";
 import { loadState } from "./storage/state.js";
-import { UserDirectory, loadOrCreateSignupKey, SESSION_SECONDS } from "./auth/google.js";
+import { UserDirectory, SESSION_SECONDS } from "./auth/google.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = process.env.STATE_PATH ?? join(process.cwd(), "data", "state.json");
@@ -36,27 +37,39 @@ function localMnemonic(): string {
   return phrase;
 }
 
-async function buildVault(): Promise<Vault> {
-  const mode = VAULT_MODE;
+/** The app's Turnkey keys: from ROFL's key service when running in ROFL, from laptop files otherwise. */
+const keys = VAULT_MODE === "turnkey" || LOGIN_MODE === "google" ? await loadAppKeys(dirname(STATE_PATH)) : undefined;
+const ROFL_APP_ID = await roflAppId().catch(() => undefined);
+
+async function openTurnkeyVault(): Promise<TurnkeyVault> {
+  const dir = dirname(STATE_PATH);
+  const parentOrg = process.env.TURNKEY_ORG_ID?.trim();
+  const log = (line: string) => console.log(line);
+  const organizationId = process.env.TURNKEY_VAULT_ORG_ID?.trim() || (parentOrg ? await findOrCreateVault(parentOrg, keys!, dir, log) : readVaultOrgId(dir));
+  if (!organizationId) throw new Error("No Turnkey vault yet: set TURNKEY_ORG_ID so the app can create one, or run `npm run turnkey:setup`");
+  const vault = await TurnkeyVault.open({ organizationId, keys: { admin: keys!.admin, signer: keys!.signer }, cap: WITHDRAWAL_CAP, chainIds: CHAINS.map((c) => c.chain.id) }, log);
   const known = Object.values(loadState(STATE_PATH)?.ledger.accounts ?? {}).map((a) => a.depositAddress);
-  if (mode === "local") {
+  const held = new Set(await vault.addresses());
+  const stray = known.filter((a) => !held.has(a));
+  if (stray.length) throw new Error(`The saved ledger has ${stray.length} deposit address(es) this Turnkey vault does not hold. Use a fresh STATE_PATH for a new vault.`);
+  return vault;
+}
+
+async function buildVault(): Promise<Vault> {
+  if (VAULT_MODE === "local") {
+    const known = Object.values(loadState(STATE_PATH)?.ledger.accounts ?? {}).map((a) => a.depositAddress);
     const mnemonic = process.env.LOCAL_VAULT_MNEMONIC?.trim() || localMnemonic();
     return new LocalVault(mnemonic, known, WITHDRAWAL_CAP);
   }
-  if (mode === "turnkey") {
-    const dir = dirname(STATE_PATH);
-    const organizationId = process.env.TURNKEY_VAULT_ORG_ID?.trim() || readVaultOrgId(dir);
-    if (!organizationId) throw new Error("No Turnkey vault yet: run `npm run turnkey:setup` first");
-    const vault = await TurnkeyVault.open(
-      { organizationId, keys: loadOrCreateAppKeys(dir), cap: WITHDRAWAL_CAP, chainIds: CHAINS.map((c) => c.chain.id) },
-      (line) => console.log(line),
-    );
-    const held = new Set(await vault.addresses());
-    const stray = known.filter((a) => !held.has(a));
-    if (stray.length) throw new Error(`The saved ledger has ${stray.length} deposit address(es) this Turnkey vault does not hold. Use a fresh STATE_PATH for a new vault.`);
-    return vault;
+  if (VAULT_MODE !== "turnkey") throw new Error(`Unknown VAULT_MODE=${VAULT_MODE} (use local or turnkey)`);
+  try {
+    return await openTurnkeyVault();
+  } catch (err) {
+    // NEXT PERSON: on a first ROFL start this is normal until the app's sign-up key is registered in Will's
+    // organization (`npm run turnkey:signup-setup` with SIGNUP_PUBLIC_KEY from /api/status). The app keeps retrying.
+    console.log(`Turnkey vault not ready: ${(err as Error).message}. Retrying every 30 seconds.`);
+    return new PendingVault((err as Error).message);
   }
-  throw new Error(`Unknown VAULT_MODE=${mode} (use local or turnkey)`);
 }
 
 function buildDirectory(): UserDirectory | undefined {
@@ -67,9 +80,21 @@ function buildDirectory(): UserDirectory | undefined {
   return UserDirectory.open(parentOrg, signupKey!);
 }
 
-const signupKey = LOGIN_MODE === "google" ? loadOrCreateSignupKey(dirname(STATE_PATH)) : undefined;
+const signupKey = LOGIN_MODE === "google" ? keys!.signup : undefined;
 const directory = buildDirectory();
 const app = new App(await buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER });
+if (app.vault instanceof PendingVault) {
+  const pending = app.vault;
+  const retry = setInterval(() => {
+    openTurnkeyVault()
+      .then((v) => {
+        clearInterval(retry);
+        app.vault = v;
+        console.log(`Turnkey vault ready: ${v.describe()}`);
+      })
+      .catch((err) => (pending.reason = (err as Error).message));
+  }, 30_000);
+}
 const server = Fastify({ logger: false });
 
 // Serialize bigint anywhere in a response.
@@ -92,6 +117,10 @@ server.get("/api/status", async () => ({
   assets: ASSETS,
   chains: CHAINS.map((c) => ({ asset: c.asset, chainId: c.chain.id, name: c.chain.name, confirmations: c.confirmations, head: app.heads[c.asset] ?? null })),
   withdrawalCap: WITHDRAWAL_CAP.toString(),
+  vaultReady: !(app.vault instanceof PendingVault),
+  // Public halves only. In ROFL the private halves come from the enclave's key service and never leave it.
+  appKeys: keys ? { source: keys.source, vaultAdmin: keys.admin.publicKey, vaultSigner: keys.signer.publicKey, signup: keys.signup.publicKey } : null,
+  roflAppId: ROFL_APP_ID ?? null,
   // The sign-up key's public half is shown so Will can register it with the one-time sign-up setup.
   login: { mode: LOGIN_MODE, googleClientId: GOOGLE_CLIENT_ID ?? null, signupPublicKey: signupKey?.publicKey ?? null, sessionSeconds: SESSION_SECONDS },
   liquidityProvider: LIQUIDITY_PROVIDER ?? null,

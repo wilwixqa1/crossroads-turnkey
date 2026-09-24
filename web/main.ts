@@ -191,6 +191,7 @@ async function createAccount(name: string) {
 /** One line under the header saying what is real and what is a stand-in. */
 function banner(s: Status): string {
   const google = s.login.mode === "google";
+  if (!s.vaultReady) return "The Turnkey vault is being set up. Deposits and withdrawals open in a minute.";
   if (s.mode === "turnkey" && google) return "Your account is your own Turnkey wallet, and the vault is Turnkey. Neither key is held by this app.";
   if (s.mode === "turnkey") return "The vault is Turnkey. The login is a stand-in: your key lives in this browser.";
   if (google) return "Your account is your own Turnkey wallet. The vault is still a stand-in inside the app.";

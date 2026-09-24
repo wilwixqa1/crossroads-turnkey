@@ -22,6 +22,21 @@ export interface Vault {
   describe(): string;
 }
 
+/** Stands in while the Turnkey vault is being set up, so the page can load and say so. It can do nothing. */
+export class PendingVault implements Vault {
+  readonly label = "Turnkey";
+  constructor(public reason: string) {}
+  async newDepositAddress(): Promise<string> {
+    throw new Error("The Turnkey vault is still being set up. Try again in a minute.");
+  }
+  async signTransaction(): Promise<Hex> {
+    throw new Error("The Turnkey vault is still being set up");
+  }
+  describe() {
+    return `Turnkey vault not ready yet: ${this.reason}`;
+  }
+}
+
 export class LocalVault implements Vault {
   readonly label = "Stand-in vault";
   private accounts = new Map<string, HDAccount>();

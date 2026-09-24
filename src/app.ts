@@ -71,7 +71,7 @@ export class App {
   private timers: NodeJS.Timeout[] = [];
   private busy = new Set<string>();
 
-  constructor(readonly vault: Vault, readonly statePath: string, readonly opts: AppOptions = {}) {
+  constructor(public vault: Vault, readonly statePath: string, readonly opts: AppOptions = {}) {
     const saved = loadState(statePath);
     this.ledger = new Ledger(saved?.ledger);
     for (const [k, v] of Object.entries(saved?.scanCursor ?? {})) this.scanCursor[k] = BigInt(v);

@@ -7,7 +7,9 @@
  *
  * Settings: TURNKEY_ORG_ID, TURNKEY_API_PUBLIC_KEY, TURNKEY_API_PRIVATE_KEY (Will's parent org and key).
  * SIGNUP_PUBLIC_KEY: the sign-up key the running app shows on /api/status. Unset: the key kept beside STATE_PATH
- * (laptop). Safe to re-run: it creates only what is missing, and adds a new key if the app's key changed.
+ * (laptop). Safe to re-run: it creates only what is missing. If the app's key changed (a new deployment), it adds
+ * the new key and removes every other key from the sign-up user, so only the running app holds this permission.
+ * KEEP_OTHER_KEYS=1 skips the removal (for a temporary test key beside the live one).
  */
 import { dirname, join } from "node:path";
 import { SIGNUP_USER_NAME, loadOrCreateSignupKey, signupPolicy } from "../auth/google.js";
@@ -42,6 +44,11 @@ if (!user) {
   console.log(`${SIGNUP_USER_NAME} already holds this sign-up key`);
 }
 if (!user) throw new Error("The sign-up user was not found after creating it");
+const others = user.apiKeys.filter((k) => k.credential.publicKey !== publicKey);
+if (others.length && process.env.KEEP_OTHER_KEYS !== "1") {
+  await parent.deleteApiKeys({ ...org, userId: user.userId, apiKeyIds: others.map((k) => k.apiKeyId) });
+  console.log(`Removed ${others.length} older sign-up key(s): ${others.map((k) => k.credential.publicKey.slice(0, 12)).join(", ")}`);
+}
 
 const policy = signupPolicy(user.userId);
 const { policies } = await parent.getPolicies(org);

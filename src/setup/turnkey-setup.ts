@@ -10,7 +10,7 @@
 import { dirname, join } from "node:path";
 import { WITHDRAWAL_CAP } from "../app.js";
 import { CHAINS } from "../chains/config.js";
-import { ADMIN_USER_NAME, TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, turnkeyClient, writeVaultOrgId } from "../signer/turnkey.js";
+import { TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, turnkeyClient, vaultSubOrgParams, writeVaultOrgId } from "../signer/turnkey.js";
 
 const need = (name: string) => {
   const v = process.env[name]?.trim();
@@ -27,17 +27,7 @@ let organizationId = readVaultOrgId(dir);
 if (organizationId) {
   console.log(`Vault sub-organization already exists: ${organizationId}`);
 } else {
-  const res = await parent.createSubOrganization({
-    organizationId: parentOrg,
-    subOrganizationName: `Crossroads vault ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
-    rootUsers: [{ userName: ADMIN_USER_NAME, apiKeys: [{ apiKeyName: "app-admin-key", publicKey: keys.admin.publicKey, curveType: "API_KEY_CURVE_P256" }], authenticators: [], oauthProviders: [] }],
-    rootQuorumThreshold: 1,
-    // No email or phone anywhere in the vault, so there is nothing for parent-initiated recovery to use.
-    disableEmailRecovery: true,
-    disableEmailAuth: true,
-    disableSmsAuth: true,
-    disableOtpEmailAuth: true,
-  });
+  const res = await parent.createSubOrganization(vaultSubOrgParams(parentOrg, keys.admin.publicKey));
   organizationId = res.subOrganizationId;
   writeVaultOrgId(dir, organizationId);
   console.log(`Created the vault sub-organization ${organizationId}; its only root user is the app's admin key`);

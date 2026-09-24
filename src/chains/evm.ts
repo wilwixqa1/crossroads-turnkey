@@ -12,7 +12,7 @@
  */
 import { createPublicClient, http, formatEther, keccak256, type PublicClient, type Hex, type TransactionSerializable } from "viem";
 import type { ChainConfig } from "./config.js";
-import type { Vault } from "../signer/index.js";
+import { VaultError, type Vault, type VaultNote } from "../signer/index.js";
 
 export interface FoundDeposit {
   asset: ChainConfig["asset"];
@@ -37,7 +37,11 @@ export type WithdrawalResult =
   | { state: "done"; feeActual: bigint; success: boolean };
 
 /** The vault (Turnkey, or the stand-in) declined to sign. Distinct from network errors so the UI can say who refused. */
-export class VaultRefusal extends Error {}
+export class VaultRefusal extends Error {
+  constructor(message: string, readonly note: VaultNote = {}) {
+    super(message);
+  }
+}
 
 export class EvmChain {
   readonly clients: PublicClient[];
@@ -126,7 +130,7 @@ export class EvmChain {
    * sign; nothing has been signed in that case. Once signed, this never throws: a broadcast error is
    * returned instead, because the transaction may still reach the chain.
    */
-  async sendWithdrawal(vault: Vault, fromAddress: string, to: string, amount: bigint): Promise<SentWithdrawal> {
+  async sendWithdrawal(vault: Vault, fromAddress: string, to: string, amount: bigint, note?: VaultNote): Promise<SentWithdrawal> {
     const [nonce, fees] = await Promise.all([
       this.primary.getTransactionCount({ address: fromAddress as Hex, blockTag: "pending" }),
       this.primary.estimateFeesPerGas(),
@@ -143,9 +147,9 @@ export class EvmChain {
     };
     let signed: Hex;
     try {
-      signed = await vault.signTransaction(fromAddress, tx);
+      signed = await vault.signTransaction(fromAddress, tx, note);
     } catch (err) {
-      throw new VaultRefusal((err as Error).message);
+      throw new VaultRefusal((err as Error).message, err instanceof VaultError ? err.note : {});
     }
     const txHash = keccak256(signed);
     try {

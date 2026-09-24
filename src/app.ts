@@ -15,7 +15,7 @@ import { Ledger, LedgerError, type Asset, type Account, type Withdrawal } from "
 import { verifyRequest, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor } from "./chains/config.js";
 import { EvmChain, VaultRefusal } from "./chains/evm.js";
-import type { Vault } from "./signer/index.js";
+import type { Vault, VaultNote } from "./signer/index.js";
 import { loadState, saveState, type AppState } from "./storage/state.js";
 
 /**
@@ -46,6 +46,20 @@ export interface HoodEntry {
   ms?: number;
   /** turnkey: the vault (Turnkey, or the stand-in). wallet: the user's own Turnkey wallet. */
   source: "turnkey" | "wallet" | "chain" | "ledger";
+  /** Which Turnkey key acted, when one did. */
+  key?: "your wallet" | "vault signer" | "vault admin" | "sign-up key";
+  /** The Turnkey activity, so the line can be matched in the dashboard. */
+  activityId?: string;
+  /** The Turnkey policy decision, by policy name. */
+  policy?: string;
+  /** The user action this line belongs to: `req:<account>:<seq>` or `signin:<account>:<time>`. */
+  ref?: string;
+}
+
+/** What the page tells the app about the signature it just got from the user's Turnkey wallet. Display only. */
+export interface RequestTrace {
+  activityId?: string;
+  signMs?: number;
 }
 
 const ACTION_NAMES: Record<SignedRequest["action"], string> = {
@@ -92,10 +106,12 @@ export class App {
 
   // ---------- accounts ----------
 
-  async signUp(id: string, name: string): Promise<Account> {
+  async signUp(id: string, name: string, ref?: string): Promise<Account> {
     const t0 = Date.now();
-    const depositAddress = await this.vault.newDepositAddress();
-    this.log({ source: "turnkey", account: id.toLowerCase(), text: `${this.vault.label} created a deposit address for ${name}: ${depositAddress}. It works on every chain the app supports.`, ms: Date.now() - t0 });
+    const note: VaultNote = {};
+    const depositAddress = await this.vault.newDepositAddress(note);
+    const turnkey = this.vault.label === "Turnkey";
+    this.log({ source: "turnkey", account: id.toLowerCase(), key: turnkey ? "vault admin" : undefined, activityId: note.activityId, ref, text: `${this.vault.label} created a deposit address for ${name} in the vault: ${depositAddress}. It works on every chain the app supports.`, ms: Date.now() - t0 });
     const acct = this.ledger.createAccount(id, name, depositAddress);
     this.save();
     return acct;
@@ -103,26 +119,30 @@ export class App {
 
   // ---------- signed requests ----------
 
-  async handleRequest(req: SignedRequest): Promise<Record<string, unknown>> {
+  async handleRequest(req: SignedRequest, trace?: RequestTrace): Promise<Record<string, unknown>> {
     await verifyRequest(req);
     const acct = this.ledger.getAccount(req.account);
     this.ledger.consumeSeq(acct.id, req.seq);
-    this.log({ source: "ledger", account: acct.id, text: `Checked your wallet's signature on request #${req.seq}. That number is now used and cannot be replayed.` });
+    const ref = `req:${acct.id}:${req.seq}`;
+    if (trace?.activityId) {
+      this.log({ source: "wallet", account: acct.id, key: "your wallet", activityId: trace.activityId, ms: trace.signMs, ref, text: `Your Turnkey wallet signed request #${req.seq} (${ACTION_NAMES[req.action].toLowerCase()}) through this browser's session. No pop-up, no gas.` });
+    }
+    this.log({ source: "ledger", account: acct.id, ref, text: `Crossroads checked that signature against your account and used up request number ${req.seq}, so it can never be replayed.` });
     const firstEvent = this.ledger.state.nextEventId;
     const t0 = performance.now();
     try {
-      const result = await this.apply(acct, req);
+      const result = await this.apply(acct, req, ref);
       const settledMs = Math.round((performance.now() - t0) * 100) / 100;
       // Stamp the settlement time on the events this request produced, so the activity feed can show it.
       for (const e of this.ledger.state.events) if (e.id >= firstEvent) e.detail.settledMs = settledMs;
-      if (req.action !== "withdraw") this.log({ source: "ledger", account: acct.id, text: `${ACTION_NAMES[req.action]} settled on the ledger. No blockchain involved.`, ms: settledMs });
-      return { ...result, settledMs };
+      if (req.action !== "withdraw") this.log({ source: "ledger", account: acct.id, ref, text: `${ACTION_NAMES[req.action]} settled on the ledger. No blockchain involved.`, ms: settledMs });
+      return { ...result, settledMs, ref };
     } finally {
       this.save();
     }
   }
 
-  private async apply(acct: Account, req: SignedRequest): Promise<Record<string, unknown>> {
+  private async apply(acct: Account, req: SignedRequest, ref: string): Promise<Record<string, unknown>> {
     const p = req.params;
     const asset = p.asset as Asset;
     switch (req.action) {
@@ -147,7 +167,8 @@ export class App {
         const chain = this.chains.get(asset)!;
         const fee = await chain.estimateWithdrawalFee();
         const w = this.ledger.requestWithdrawal(acct.id, asset, amount, fee, p.destination);
-        this.log({ source: "ledger", account: acct.id, text: `Locked ${EvmChain.fmt(amount)} ETH plus a ${EvmChain.fmt(fee)} ETH fee reserve for withdrawal #${w.id}. Nothing is signed until the funds are locked.` });
+        w.ref = ref;
+        this.log({ source: "ledger", account: acct.id, ref, text: `Locked ${EvmChain.fmt(amount)} ETH plus a ${EvmChain.fmt(fee)} ETH fee reserve for withdrawal #${w.id}. Nothing is signed until the funds are locked.` });
         return { ok: true, withdrawalId: w.id, feeReserved: fee.toString() };
       }
       default:
@@ -290,25 +311,29 @@ export class App {
       // reaches the vault's policy when one vault address really holds more than the amount plus fee on that chain.
       if (!from) {
         this.ledger.failWithdrawal(w.id, "No single vault address holds enough on this chain");
-        this.log({ source: "ledger", account: w.account, text: `Withdrawal #${w.id} not sent: no single vault address holds enough on ${chainName} (needs rebalancing). Funds unlocked.` });
+        this.log({ source: "ledger", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} not sent: no single vault address holds enough on ${chainName} (needs rebalancing). Funds unlocked.` });
         return;
       }
-      const sent = await chain.sendWithdrawal(this.vault, from, w.destination, w.amount);
+      const note: VaultNote = {};
+      const signer = this.vault.label === "Turnkey" ? ("vault signer" as const) : undefined;
+      const sent = await chain.sendWithdrawal(this.vault, from, w.destination, w.amount, note);
       const ms = Math.round(performance.now() - t0);
       this.ledger.markWithdrawalSent(w.id, sent.fromAddress, sent.txHash, sent.nonce);
       if (sent.broadcastError) {
-        this.log({ source: "chain", account: w.account, text: `${this.vault.label} signed withdrawal #${w.id}, but ${chainName} reported an error on broadcast (${sent.broadcastError}). Funds stay locked until it confirms or is dropped.`, link: chain.cfg.explorerTx(sent.txHash) });
+        this.log({ source: "chain", account: w.account, ref: w.ref, key: signer, activityId: note.activityId, text: `${this.vault.label} signed withdrawal #${w.id}, but ${chainName} reported an error on broadcast (${sent.broadcastError}). Funds stay locked until it confirms or is dropped.`, link: chain.cfg.explorerTx(sent.txHash) });
       } else {
-        this.log({ source: "turnkey", account: w.account, text: `${this.vault.label} checked its policy and signed withdrawal #${w.id} from ${from}. Broadcast to ${chainName}.`, ms, link: chain.cfg.explorerTx(sent.txHash) });
+        this.log({ source: "turnkey", account: w.account, ref: w.ref, key: signer, activityId: note.activityId, policy: note.policy, text: `The vault's signer asked ${this.vault.label} to sign withdrawal #${w.id} from vault address ${from}. ${this.vault.label} checked its policies and signed.`, ms });
+        this.log({ source: "chain", account: w.account, ref: w.ref, text: `Broadcast withdrawal #${w.id} to ${chainName}. Waiting for it to confirm.`, link: chain.cfg.explorerTx(sent.txHash) });
       }
     } catch (err) {
       // Nothing was signed on any path that reaches here, so unlocking cannot double-spend.
       const msg = (err as Error).message;
       this.ledger.failWithdrawal(w.id, msg);
       if (err instanceof VaultRefusal) {
-        this.log({ source: "turnkey", account: w.account, text: `${this.vault.label} refused to sign withdrawal #${w.id}: ${msg}. Funds unlocked.`, ms: Math.round(performance.now() - t0) });
+        this.log({ source: "turnkey", account: w.account, ref: w.ref, key: this.vault.label === "Turnkey" ? "vault signer" : undefined, activityId: err.note.activityId, policy: err.note.policy, text: `${this.vault.label} refused to sign withdrawal #${w.id}: ${msg}. Nothing was signed.`, ms: Math.round(performance.now() - t0) });
+        this.log({ source: "ledger", account: w.account, ref: w.ref, text: `Crossroads unlocked the funds for withdrawal #${w.id}. Your balance is back.` });
       } else {
-        this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} not sent: ${msg}. Funds unlocked.` });
+        this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} not sent: ${msg}. Funds unlocked.` });
       }
     } finally {
       this.save();
@@ -323,16 +348,16 @@ export class App {
       if (w.nonce === undefined || Date.now() - w.updatedAt < App.DROP_GRACE_MS) return;
       if (!(await chain.wasDropped(w.txHash!, w.fromAddress!, w.nonce))) return;
       this.ledger.failWithdrawal(w.id, "transaction dropped");
-      this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} never reached the chain and another transaction used its slot, so it can no longer land. Funds unlocked.` });
+      this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} never reached the chain and another transaction used its slot, so it can no longer land. Funds unlocked.` });
       this.save();
       return;
     }
     if (res.success) {
       this.ledger.completeWithdrawal(w.id, res.feeActual);
-      this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} confirmed. Real fee ${EvmChain.fmt(res.feeActual)} ETH, unused reserve refunded.`, link: chain.cfg.explorerTx(w.txHash!) });
+      this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} confirmed on-chain. Real fee ${EvmChain.fmt(res.feeActual)} ETH, unused reserve refunded.`, link: chain.cfg.explorerTx(w.txHash!) });
     } else {
       this.ledger.failWithdrawal(w.id, "transaction reverted");
-      this.log({ source: "chain", account: w.account, text: `Withdrawal #${w.id} reverted on-chain. Funds unlocked.` });
+      this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} reverted on-chain. Funds unlocked.` });
     }
     this.save();
   }

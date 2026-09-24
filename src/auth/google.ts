@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { TurnkeyApiClient } from "@turnkey/sdk-server";
-import { apiKeyFromRaw, turnkeyClient, type ApiKeyPair, type PolicySpec } from "../signer/turnkey.js";
+import { activityIdOf, apiKeyFromRaw, turnkeyClient, type ApiKeyPair, type PolicySpec } from "../signer/turnkey.js";
 
 export const SIGNUP_USER_NAME = "crossroads-signup";
 export const USER_WALLET_NAME = "Crossroads wallet";
@@ -32,6 +32,8 @@ export interface GoogleSignIn {
   expiresAt: number;
   created: boolean;
   ms: { lookup: number; create?: number; login: number };
+  /** Turnkey activity IDs: the wallet's creation (first sign-in only) and the session's opening. */
+  activities: { create?: string; login?: string };
 }
 
 /** The display claims of a Google token. Only read after Turnkey has accepted the token, and only for names on screen. */
@@ -76,6 +78,7 @@ export class UserDirectory {
     let organizationId = organizationIds?.[0];
     let address: string | undefined;
     let created = false;
+    const activities: GoogleSignIn["activities"] = {};
     if (!organizationId) {
       t0 = Date.now();
       // NEXT PERSON: no email, phone, or email recovery on user wallets. The only way in is this Google account, so
@@ -95,6 +98,7 @@ export class UserDirectory {
         },
       });
       ms.create = Date.now() - t0;
+      activities.create = activityIdOf(res);
       organizationId = res.subOrganizationId;
       address = res.wallet?.addresses?.[0];
       created = true;
@@ -103,11 +107,13 @@ export class UserDirectory {
     address ??= await this.walletAddress(organizationId);
 
     t0 = Date.now();
-    const { session } = await this.client.oauthLogin({ organizationId, oidcToken, publicKey, expirationSeconds: String(SESSION_SECONDS) });
+    const login = await this.client.oauthLogin({ organizationId, oidcToken, publicKey, expirationSeconds: String(SESSION_SECONDS) });
+    const { session } = login;
+    activities.login = activityIdOf(login);
     ms.login = Date.now() - t0;
     if (!session) throw new Error("Turnkey did not open a session");
 
-    return { organizationId, address: address.toLowerCase(), name, session, expiresAt: Date.now() + SESSION_SECONDS * 1000, created, ms };
+    return { organizationId, address: address.toLowerCase(), name, session, expiresAt: Date.now() + SESSION_SECONDS * 1000, created, ms, activities };
   }
 
   /** The user's wallet address, read with the parent's read-only access to the sub-organization. */

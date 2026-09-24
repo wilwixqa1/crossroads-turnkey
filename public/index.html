@@ -137,6 +137,22 @@
   /* under the hood */
   .hood { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--vault); border-radius: 8px; padding: 1rem 1.1rem; }
   .hood ol { list-style: none; margin: .5rem 0 0; padding: 0; }
+  .latest { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--vault); border-radius: 8px; padding: .9rem 1.1rem 1rem; }
+  .latest h2 { margin: 0 0 .6rem; font-size: 1rem; }
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; display: grid; gap: .45rem; }
+  .steps li { counter-increment: step; position: relative; padding: .5rem .7rem .5rem 2.4rem; background: var(--soft); border-radius: 6px; }
+  .steps li::before { content: counter(step); position: absolute; left: .6rem; top: .55rem; width: 1.3rem; height: 1.3rem; border-radius: 50%; display: grid; place-items: center; font-size: .75rem; font-weight: 700; background: var(--vault-bg); color: var(--vault); }
+  .steps li.waiting::before { content: "…"; }
+  .steps li p { margin: .1rem 0 0; font-size: .9rem; overflow-wrap: anywhere; }
+  .steps .src { font-size: .75rem; font-weight: 700; }
+  .steps .src-turnkey .src, .steps .src-wallet .src { color: var(--vault); }
+  .steps .src-chain .src { color: var(--onchain); }
+  .steps .src-ledger .src { color: var(--instant); }
+  .steps .meta { display: flex; flex-wrap: wrap; gap: .8rem; font-size: .8rem; color: var(--muted); }
+  .policy { font-size: .82rem; font-weight: 600; }
+  .policy.allow { color: var(--instant); }
+  .policy.deny { color: #b3261e; }
+  .act { font-size: .8rem; }
   .hood li { padding: .6rem 0; border-top: 1px solid var(--line); }
   .hood li p { margin: .15rem 0 0; font-size: .9rem; overflow-wrap: anywhere; }
   .hood .src { font-size: .75rem; font-weight: 700; }

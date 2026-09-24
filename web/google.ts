@@ -75,11 +75,12 @@ export const googleSession = {
 
 /** Signs each request with the user's Turnkey wallet: one Turnkey signature, no pop-up. */
 export function turnkeySigner(s: GoogleSession): RequestSigner {
-  return {
+  const signer: RequestSigner = {
     address: s.address,
     description: "your Turnkey wallet",
     async signMessage(message: string): Promise<Hex> {
       const client = new TurnkeyClient({ baseUrl: TURNKEY_API }, await sessionStamper());
+      const t0 = performance.now();
       const res = await client.signRawPayload({
         type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2",
         timestampMs: String(Date.now()),
@@ -89,9 +90,11 @@ export function turnkeySigner(s: GoogleSession): RequestSigner {
       });
       const sig = res.activity.result.signRawPayloadResult;
       if (res.activity.status !== "ACTIVITY_STATUS_COMPLETED" || !sig) throw new Error(`Turnkey did not sign (${res.activity.status})`);
+      signer.lastActivity = { id: res.activity.id, ms: Math.round(performance.now() - t0) };
       return signatureFromTurnkey(sig);
     },
   };
+  return signer;
 }
 
 /** Turnkey returns r, s and v as bare hex, with v as 00 or 01; Ethereum signatures use 27 or 28. */

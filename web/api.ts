@@ -83,6 +83,10 @@ export interface HoodEntry {
   account?: string;
   text: string;
   link?: string;
+  key?: "your wallet" | "vault signer" | "vault admin" | "sign-up key";
+  activityId?: string;
+  policy?: string;
+  ref?: string;
   ms?: number;
   source: "turnkey" | "wallet" | "chain" | "ledger";
 }
@@ -104,10 +108,10 @@ export const api = {
   status: () => call<Status>("/api/status"),
   account: (id: string) => call<AccountView>(`/api/accounts/${id}`),
   googleSignIn: (oidcToken: string, publicKey: string) =>
-    call<{ organizationId: string; address: string; name: string; session: string; expiresAt: number; created: boolean }>("/api/auth/google", { method: "POST", body: JSON.stringify({ oidcToken, publicKey }) }),
+    call<{ organizationId: string; address: string; name: string; session: string; expiresAt: number; created: boolean; ref: string }>("/api/auth/google", { method: "POST", body: JSON.stringify({ oidcToken, publicKey }) }),
   signUp: (id: string, name: string) => call<AccountView>("/api/accounts", { method: "POST", body: JSON.stringify({ id, name }) }),
   hood: (id: string) => call<HoodEntry[]>(`/api/hood?account=${encodeURIComponent(id)}`),
   quote: (assetIn: Asset, assetOut: Asset, amount: bigint) =>
     call<{ amountOut: string }>(`/api/quote?assetIn=${assetIn}&assetOut=${assetOut}&amount=${amount}`),
-  request: (req: SignedRequest) => call<Record<string, unknown> & { settledMs?: number }>("/api/requests", { method: "POST", body: JSON.stringify(req) }),
+  request: (req: SignedRequest & { trace?: { activityId?: string; signMs?: number } }) => call<Record<string, unknown> & { settledMs?: number }>("/api/requests", { method: "POST", body: JSON.stringify(req) }),
 };

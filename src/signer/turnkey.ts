@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 import { getPublicKey } from "@turnkey/crypto";
 import { bytesToHex, formatEther, getAddress, serializeTransaction, type Hex, type TransactionSerializable } from "viem";
-import type { Vault } from "./index.js";
+import { VaultError, type Vault, type VaultNote } from "./index.js";
 
 export const TURNKEY_API = process.env.TURNKEY_API_BASE_URL ?? "https://api.turnkey.com";
 export const VAULT_WALLET_NAME = "Crossroads vault";
@@ -106,6 +106,11 @@ export async function findOrCreateVault(parentOrgId: string, keys: { admin: ApiK
   return res.subOrganizationId;
 }
 
+/** The Turnkey activity ID the SDK attaches to every completed call. */
+export function activityIdOf(res: unknown): string | undefined {
+  return (res as { activity?: { id?: string } })?.activity?.id;
+}
+
 export interface PolicySpec {
   policyName: string;
   effect: "EFFECT_ALLOW" | "EFFECT_DENY";
@@ -141,7 +146,7 @@ export function signerPolicies(signerUserId: string, walletId: string, cap: bigi
 /** The Turnkey calls the vault uses; a narrow slice so tests can stand in for Turnkey. */
 export type TurnkeyCalls = Pick<
   TurnkeyApiClient,
-  "getWallets" | "createWallet" | "getWalletAccounts" | "createWalletAccounts" | "getUsers" | "createUsers" | "getPolicies" | "createPolicies" | "signTransaction"
+  "getWallets" | "createWallet" | "getWalletAccounts" | "createWalletAccounts" | "getUsers" | "createUsers" | "getPolicies" | "createPolicies" | "signTransaction" | "getActivities"
 >;
 
 export interface TurnkeyVaultConfig {
@@ -216,13 +221,23 @@ export class TurnkeyVault implements Vault {
     }
   }
 
+  /** The newest refused signature in the vault, so the page can name the exact activity Turnkey rejected. */
+  private async lastRejectedSignature(): Promise<string | undefined> {
+    try {
+      const { activities } = await this.admin.getActivities({ ...this.org, filterByType: ["ACTIVITY_TYPE_SIGN_TRANSACTION_V2"], filterByStatus: ["ACTIVITY_STATUS_REJECTED"], paginationOptions: { limit: "1" } });
+      return activities[0]?.id;
+    } catch {
+      return undefined; // display only
+    }
+  }
+
   /** Every address in the vault wallet, lowercase. */
   async addresses(): Promise<string[]> {
     const { accounts } = await this.admin.getWalletAccounts({ ...this.org, walletId: this.walletId });
     return accounts.map((a) => a.address.toLowerCase());
   }
 
-  newDepositAddress(): Promise<string> {
+  newDepositAddress(note?: VaultNote): Promise<string> {
     const next = this.queue.then(async () => {
       const { accounts } = await this.admin.getWalletAccounts({ ...this.org, walletId: this.walletId });
       const used = accounts.map((a) => Number(a.path.split("/").pop()));
@@ -232,14 +247,16 @@ export class TurnkeyVault implements Vault {
         walletId: this.walletId,
         accounts: [{ curve: "CURVE_SECP256K1", pathFormat: "PATH_FORMAT_BIP32", path: `m/44'/60'/0'/0/${index}`, addressFormat: "ADDRESS_FORMAT_ETHEREUM" }],
       });
+      if (note) note.activityId = activityIdOf(res);
       return res.addresses[0];
     });
     this.queue = next.catch(() => undefined);
     return next;
   }
 
-  async signTransaction(fromAddress: string, tx: TransactionSerializable): Promise<Hex> {
+  async signTransaction(fromAddress: string, tx: TransactionSerializable, note?: VaultNote): Promise<Hex> {
     const unsigned = serializeTransaction(tx);
+    const [allowName, capName] = signerPolicies("", "", this.cfg.cap, this.cfg.chainIds).map((p) => p.policyName);
     let signed: string;
     try {
       const res = await this.signer.signTransaction({
@@ -249,6 +266,10 @@ export class TurnkeyVault implements Vault {
         type: "TRANSACTION_TYPE_ETHEREUM",
       });
       signed = res.signedTransaction;
+      if (note) {
+        note.activityId = activityIdOf(res);
+        note.policy = `Allowed by "${allowName}" (${formatEther(tx.value ?? 0n)} ETH, within the ${formatEther(this.cfg.cap)} ETH cap)`;
+      }
     } catch (err) {
       // Turnkey answers every policy refusal the same way ("insufficient permissions"); say which limit the request broke.
       if (!/sufficient permissions/i.test((err as Error).message)) throw err;
@@ -259,7 +280,11 @@ export class TurnkeyVault implements Vault {
           : tx.chainId !== undefined && !this.cfg.chainIds.includes(tx.chainId)
             ? `chain ${tx.chainId} is not one the vault may sign for`
             : "no policy allows this signature";
-      throw new Error(`Policy refused: ${why}`);
+      const overCap = value > this.cfg.cap;
+      throw new VaultError(`Policy refused: ${why}`, {
+        activityId: await this.lastRejectedSignature(),
+        policy: overCap ? `Denied by "${capName}"` : `No policy allows it ("${allowName}" does not match)`,
+      });
     }
     return (signed.startsWith("0x") ? signed : `0x${signed}`) as Hex;
   }

@@ -24,7 +24,9 @@ const state = {
   tab: "deposit" as Tab,
   busy: false,
   tick: 0,
-  rendered: { feed: "", hood: "" },
+  rendered: { feed: "", hood: "", latest: "" },
+  /** The action the "What just happened" card follows, and its title. */
+  latest: null as { ref: string; title: string } | null,
 };
 
 const root = document.getElementById("root")!;
@@ -151,6 +153,8 @@ async function googleSignIn(oidcToken: string, publicKey: string) {
     const s = await api.googleSignIn(oidcToken, publicKey);
     googleSession.save(s);
     await enter({ name: s.name, address: s.address }, turnkeySigner(s));
+    state.latest = { ref: s.ref, title: s.created ? "Sign up with Google" : "Sign in with Google" };
+    renderLatest();
   } catch (err) {
     renderLogin((err as Error).message);
   }
@@ -175,7 +179,7 @@ async function enter(acct: { name: string; address: string }, signer: RequestSig
   state.view = null;
   state.hood = [];
   state.tab = "deposit";
-  state.rendered = { feed: "", hood: "" };
+  state.rendered = { feed: "", hood: "", latest: "" };
   renderShell();
   await refresh();
 }
@@ -225,6 +229,7 @@ function renderShell() {
           </div>
           <div id="panel" role="tabpanel"></div>
         </section>
+        <section class="latest" id="latest" aria-live="polite" hidden></section>
         <section class="activity">
           <h2>Activity</h2>
           <ol id="feed" class="feed"></ol>
@@ -352,28 +357,62 @@ function renderFeed() {
     : `<li class="empty">Nothing yet. Start with a deposit.</li>`;
 }
 
+/** Who did a step, in the words the Turnkey dashboard would use. */
+function who(h: HoodEntry): string {
+  if (h.key) return `Turnkey · ${h.key}`;
+  return { turnkey: vaultLabel(), wallet: "Turnkey · your wallet", chain: "Network", ledger: "Crossroads" }[h.source];
+}
+
+/** The details under a step: timing, the Turnkey activity (click to copy the full ID), the policy decision, a link. */
+function stepMeta(h: HoodEntry, withClock: boolean): string {
+  const denied = h.policy && /^(Denied|No policy)/.test(h.policy);
+  return `
+    ${h.policy ? `<p class="policy ${denied ? "deny" : "allow"}">${esc(h.policy)}</p>` : ""}
+    <p class="meta">
+      ${withClock ? `<time>${fmtClock(h.at)}</time>` : ""}
+      ${h.ms !== undefined ? `<span>${fmtMs(h.ms)}</span>` : ""}
+      ${h.activityId ? `<button type="button" class="link act" data-copy="${esc(h.activityId)}" title="Turnkey activity ${esc(h.activityId)}. Click to copy.">Activity ${esc(h.activityId.slice(0, 8))}</button>` : ""}
+      ${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">View on explorer</a>` : ""}
+    </p>`;
+}
+
 function renderHood() {
   const el = $("#hood");
   if (!el) return;
   const key = JSON.stringify(state.hood.map((h) => [h.at, h.text]));
   if (key === state.rendered.hood) return;
   state.rendered.hood = key;
-  const label = { turnkey: vaultLabel(), wallet: "Turnkey: your wallet", chain: "Network", ledger: "Ledger" };
   el.innerHTML = state.hood.length
     ? state.hood
         .map(
           (h) => `<li class="src-${h.source}">
-            <span class="src">${esc(label[h.source])}</span>
+            <span class="src">${esc(who(h))}</span>
             <p>${esc(h.text)}</p>
-            <p class="meta">
-              <time>${fmtClock(h.at)}</time>
-              ${h.ms !== undefined ? `<span>${fmtMs(h.ms)}</span>` : ""}
-              ${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">View on explorer</a>` : ""}
-            </p>
+            ${stepMeta(h, true)}
           </li>`,
         )
         .join("")
     : `<li class="empty">Actions you take show up here with what each system did.</li>`;
+}
+
+/** "What just happened": every step of the latest action, in order, as it happens. */
+function renderLatest() {
+  const el = $<HTMLElement>("#latest");
+  if (!el) return;
+  // The log arrives newest first; reversing keeps the order steps were recorded in (several can share a millisecond).
+  const steps = state.latest ? [...state.hood].reverse().filter((h) => h.ref === state.latest!.ref) : [];
+  const key = JSON.stringify([state.latest?.ref, steps.map((h) => h.at)]);
+  if (key === state.rendered.latest) return;
+  state.rendered.latest = key;
+  el.hidden = !state.latest;
+  if (!state.latest) return;
+  el.innerHTML = `
+    <h2>What just happened: ${esc(state.latest.title)}</h2>
+    <ol class="steps">${
+      steps.length
+        ? steps.map((h) => `<li class="src-${h.source}"><span class="src">${esc(who(h))}</span><p>${esc(h.text)}</p>${stepMeta(h, false)}</li>`).join("")
+        : `<li class="waiting"><p>Waiting for the first step…</p></li>`
+    }</ol>`;
 }
 
 // ---------- action panel ----------
@@ -514,7 +553,10 @@ async function submit(action: RequestAction, params: Record<string, string>, out
     const { nextSeq } = await api.account(signer.address);
     say(out, `Signing request #${nextSeq} with ${signer.description}…`);
     const signature = await signer.signMessage(requestMessage(signer.address, nextSeq, action, params));
-    const res = await api.request({ account: signer.address, seq: nextSeq, action, params, signature });
+    state.latest = { ref: `req:${signer.address}:${nextSeq}`, title: ACTION_TITLES[action] };
+    renderLatest();
+    const trace = signer.lastActivity ? { activityId: signer.lastActivity.id, signMs: signer.lastActivity.ms } : undefined;
+    const res = await api.request({ account: signer.address, seq: nextSeq, action, params, signature, trace });
     say(out, done(res), "ok");
     return true;
   } catch (err) {
@@ -525,6 +567,8 @@ async function submit(action: RequestAction, params: Record<string, string>, out
     void refresh();
   }
 }
+
+const ACTION_TITLES: Record<RequestAction, string> = { transfer: "Send", swap: "Swap", withdraw: "Withdraw", add_liquidity: "Add liquidity" };
 
 const settled = (res: { settledMs?: number }) => (res.settledMs !== undefined ? ` Settled in ${fmtMs(res.settledMs)}, no blockchain involved.` : "");
 
@@ -600,6 +644,7 @@ async function refresh() {
     renderInflight();
     renderFeed();
     renderHood();
+    renderLatest();
     renderHints();
   } catch (err) {
     if (err instanceof ApiError && err.code === "NO_ACCOUNT") return renderLogin("This account is not on the app any more. Choose it again to register it.");

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseEther, type TransactionSerializable } from "viem";
 import { TurnkeyVault, apiKeyFromRaw, signerPolicies, type TurnkeyCalls } from "../src/signer/turnkey.js";
+import { VaultError, type VaultNote } from "../src/signer/index.js";
 
 const CAP = parseEther("0.05");
 const CHAINS = [11155111, 84532];
@@ -41,8 +42,9 @@ function fakeTurnkey() {
     signTransaction: async (i: { signWith: string; unsignedTransaction: string }) => {
       if (org.refuse) throw new Error("Turnkey error 7: You don't have sufficient permissions to take this action.");
       org.signed.push(i);
-      return { signedTransaction: "02f8ab" };
+      return { signedTransaction: "02f8ab", activity: { id: "act-signed-1" } };
     },
+    getActivities: async () => ({ activities: [{ id: "act-rejected-1" }] }),
   } as unknown as TurnkeyCalls;
   return { org, client };
 }
@@ -108,5 +110,18 @@ describe("the Turnkey vault", () => {
     org.refuse = true;
     await expect(vault.signTransaction("0x8928feb8852339fb84fb88095a388759de2f8a9f", tx("0.06"))).rejects.toThrow("0.06 ETH is above the 0.05 ETH per-withdrawal cap");
     await expect(vault.signTransaction("0x8928feb8852339fb84fb88095a388759de2f8a9f", tx("0.01", 1))).rejects.toThrow("chain 1 is not one the vault may sign for");
+  });
+
+  it("reports the Turnkey activity and the policy by name, for a signature and for a refusal", async () => {
+    const { org, client } = fakeTurnkey();
+    const vault = await open(client);
+    const note: VaultNote = {};
+    await vault.signTransaction("0x8928feb8852339fb84fb88095a388759de2f8a9f", tx("0.01"), note);
+    expect(note.activityId).toBe("act-signed-1");
+    expect(note.policy).toBe('Allowed by "Vault signer: withdrawals on Sepolia and Base Sepolia" (0.01 ETH, within the 0.05 ETH cap)');
+    org.refuse = true;
+    const err = await vault.signTransaction("0x8928feb8852339fb84fb88095a388759de2f8a9f", tx("0.06")).catch((e) => e);
+    expect(err).toBeInstanceOf(VaultError);
+    expect(err.note).toEqual({ activityId: "act-rejected-1", policy: 'Denied by "Vault signer: never more than 0.05 ETH per withdrawal"' });
   });
 });

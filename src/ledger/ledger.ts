@@ -47,6 +47,8 @@ export interface Withdrawal {
   createdAt: number;
   updatedAt: number;
   error?: string;
+  /** The request that made it (account and sequence number), so the page can follow the whole withdrawal as one action. */
+  ref?: string;
 }
 
 export interface Pool {

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { english, generateMnemonic } from "viem/accounts";
-import { App, WITHDRAWAL_CAP } from "./app.js";
+import { App, WITHDRAWAL_CAP, type RequestTrace } from "./app.js";
 import { LocalVault, PendingVault, type Vault } from "./signer/index.js";
 import { TurnkeyVault, findOrCreateVault, readVaultOrgId } from "./signer/turnkey.js";
 import { loadAppKeys, roflAppId } from "./signer/keys.js";
@@ -159,11 +159,12 @@ server.post<{ Body: { oidcToken: string; publicKey: string } }>("/api/auth/googl
     reply.status(401);
     return { error: `Turnkey did not accept this Google sign-in: ${(err as Error).message}`, code: "LOGIN_REFUSED" };
   }
-  if (s.created) app.log({ source: "wallet", account: s.address, text: `Turnkey created your wallet: a sub-organization of your own (${s.organizationId}) whose only way in is your Google account. Address ${s.address}.`, ms: s.ms.create });
-  app.log({ source: "wallet", account: s.address, text: `Turnkey checked your Google sign-in and opened a session for this browser's key. Each request you make is signed by your wallet through that session.`, ms: s.ms.login });
+  const ref = `signin:${s.address}:${Date.now()}`;
+  if (s.created) app.log({ source: "wallet", account: s.address, key: "sign-up key", activityId: s.activities.create, ref, text: `Turnkey created your wallet: a sub-organization of your own (${s.organizationId}) whose only way in is your Google account. Its address, ${s.address}, is your account ID.`, ms: s.ms.create });
+  app.log({ source: "wallet", account: s.address, key: "sign-up key", activityId: s.activities.login, ref, text: `Turnkey checked your Google sign-in and opened an 8-hour session for a key that lives only in this browser. Every request you make is signed by your wallet through it.`, ms: s.ms.login });
   const existing = app.ledger.state.accounts[s.address];
-  if (!existing) await app.signUp(s.address, s.name);
-  return { organizationId: s.organizationId, address: s.address, name: existing?.name ?? s.name, session: s.session, expiresAt: s.expiresAt, created: s.created };
+  if (!existing) await app.signUp(s.address, s.name, ref);
+  return { organizationId: s.organizationId, address: s.address, name: existing?.name ?? s.name, session: s.session, expiresAt: s.expiresAt, created: s.created, ref };
 });
 
 server.get<{ Params: { id: string } }>("/api/accounts/:id", async (req) => {
@@ -182,7 +183,10 @@ server.post<{ Body: Omit<SignedRequest, "signature"> }>("/api/requests/message",
   return { message: requestMessage(account, seq, action, params) };
 });
 
-server.post<{ Body: SignedRequest }>("/api/requests", async (req) => app.handleRequest(req.body));
+server.post<{ Body: SignedRequest & { trace?: RequestTrace } }>("/api/requests", async (req) => {
+  const { trace, ...signed } = req.body;
+  return app.handleRequest(signed, trace);
+});
 
 /** Credit a deposit the scan missed, by its transaction. Anyone may ask; only genuine deposits are credited, once. */
 server.post<{ Body: { asset: Asset; txHash: string } }>("/api/deposits/claim", async (req) => app.claimDeposit(req.body?.asset, req.body?.txHash));

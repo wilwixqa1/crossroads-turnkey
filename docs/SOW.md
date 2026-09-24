@@ -2,7 +2,7 @@
 
 > Snapshot of the living Scope of Work. The editable version is a Claude Doc (link in docs/sessions/T01_CONTEXT.md). Re-export here at each session close-out so the repo copy never drifts far.
 
-Sep 23, 2026 · @Will
+Sep 24, 2026 · @Will (Claude Doc rev 74)
 
 ## Purpose and success criteria
 
@@ -45,6 +45,10 @@ The rules below come from the [Liquefaction paper](https://arxiv.org/abs/2412.02
 | 8 | The person withdrawing pays the network fee | Crossroads withdrawal accounting | The fee comes out of the user's locked amount. |
 | 9 | Anyone can always withdraw what they own | Crossroads soundness guarantee | The app checks that on-chain funds always cover everyone's ledger balances, and the proof screen shows it. |
 
+**Where the demo departs from the papers.** The Crossroads paper's base design has one encumbered address per chain, and each deposit carries a tag naming the account it credits. Per-user deposit addresses (for wallets and exchanges that cannot add the tag, later consolidated into the main address) and several addresses per chain (for withdrawal throughput) are its optional add-ons. The demo uses both add-ons without consolidation, Turnkey in place of the signing committee, embedded wallets in place of users' own keys, and a verified ROFL ledger in place of the backend chain and its contracts. For Bryce: the demo uses the paper's per-user deposit address and multi-address optimizations, with Turnkey as the signing committee and a verified ROFL app standing in for the backend chain.
+
+**What stays private.** Deposits and withdrawals are public on their chains and link a depositor's wallet to a vault address. Trades and transfers inside the ledger never appear on-chain. The Crossroads paper claims the same exchange-level privacy. Liquefaction's privacy is a different kind: who controls an encumbered address can change with no on-chain trace. One gap in the demo: anyone with an account ID can read that account's balances from the app's API.
+
 ## Architecture
 
 Three pieces: Turnkey holds every key (each user's wallet and the shared vault), one ROFL app keeps the ledger and makes every decision, and a web page served by that same app is what users see.
@@ -83,27 +87,32 @@ Turnkey is set up two ways. Each user gets a standard embedded wallet: a sub-org
 
 **The vault.** The rest of this section describes the vault sub-organization.
 
-**Two app keys, two jobs.** Turnkey's [root users can bypass the policy engine](https://docs.turnkey.com/concepts/users/root-quorum), so the app uses a root key only for setup and a separate, policy-limited key for everyday signing. Both come from ROFL's [key generation](https://docs.oasis.io/build/rofl/features/appd), which only works inside an attested app and returns the same key every time the app restarts.
+**Three app keys, three jobs.** Turnkey's [root users can bypass the policy engine](https://docs.turnkey.com/concepts/users/root-quorum), so the app uses a root key only for setup and a separate, policy-limited key for everyday signing, plus a narrowly limited sign-up key in Will's organization. All three come from ROFL's [key generation](https://docs.oasis.io/build/rofl/features/appd), which only works inside an attested app and returns the same key every time the app restarts.
 
 | App key | Turnkey role | Can do |
 | --- | --- | --- |
-| Admin key | Sole root user of the sub-organization | One-time setup: create the vault wallet, the signer user, and the policies |
+| Admin key | Sole root user of the sub-organization | Setup (vault wallet, signer user, policies) and adding each user's deposit address. As root it could do anything; the vault lock below would end that |
 | Signer key | Ordinary user, zero permissions except its policies | Sign withdrawals from the vault wallet, within the limits below |
+| Sign-up key | Ordinary user crossroads-signup in Will's organization | Create sub-organizations (each user's wallet, and the vault on first start) and start Google logins. Refused anything else, confirmed live |
 
 **Setup sequence:**
 
-1. The app starts in ROFL, generates both keys, and shows their public halves on its status page.
-2. Will runs a one-time setup script with his parent-org credentials that creates the sub-organization with the app's admin key as its only root user.
-3. The app, acting as admin, creates the vault wallet and the signer user. Deposit addresses are added to the vault wallet later, one per user, the first time each user signs up. The same address works on Sepolia and Base Sepolia.
-4. The app, still as admin, creates the signer's policies. After this, the admin key is used only to read status and to add deposit addresses.
+1. The app starts in ROFL, takes its three keys from ROFL's key service, and shows their public halves on its status page.
+2. Will runs a one-time setup with his parent-org credentials. It registers the sign-up key as the user crossroads-signup, with one policy: create sub-organizations and start logins. Registering a new sign-up key removes every older one.
+3. The app creates its own vault with the sign-up key: a sub-organization whose only root user is the app's admin key. Will's organization never touches the vault. After a move to a new machine, the app finds its vault again by asking Turnkey which sub-organization its admin key belongs to.
+4. The app, as admin, creates the vault wallet, the signer user, and the signer's policies. Deposit addresses are added later, one per user at first sign-in, and work on both chains. After this the admin key only reads status and adds deposit addresses.
 
 **Signer policies** (Turnkey denies anything not explicitly allowed):
 
 - Sign Ethereum transactions only from the vault wallet and only on Sepolia (chain 11155111) or Base Sepolia (chain 84532), following Turnkey's [policy examples](https://docs.turnkey.com/concepts/policies/examples).
-- Cap each withdrawal at 0.05 ETH.
+- Cap each withdrawal per network: 0.05 ETH on Sepolia, 0.02 ETH on Base Sepolia (decided Sept 24; the live vault has the single 0.05 ETH cap until the app replaces its policies).
 - Nothing else: no key export, no new users, no policy changes.
 
 The caps are a circuit breaker. Even if the app had a bug, Turnkey itself would refuse a withdrawal above the limit.
+
+A flat per-withdrawal cap is for the demo: it shows in one move that Turnkey enforces a rule the app cannot override. In production the check that users only withdraw what they own is the ledger's canSign step, and the Turnkey backstop would be a spending limit over time (Turnkey lists a velocity-control feature, untested), so a bad app version could only drain slowly.
+
+**Vault lock (tested Sept 24, not applied).** Three calls, made by the admin key from inside the app: the signer gets permission to add deposit addresses to the vault wallet; a second root user is created whose key is thrown away; the root quorum becomes 2 of those two. On a throwaway vault, the admin's attempts to add a policy, export the wallet, add a user, or undo the lock all sat at "Consensus needed" forever; the signer still added an address and signed 0.01 ETH, and 0.06 was still refused. Irreversible: a locked vault can never change its cap or chains. Will chose to wait. It freezes the rules but not the signer, so a malicious upgrade could still withdraw within the rules.
 
 **What Will can and cannot do.** He can see the vault's addresses, balances, and signing history from his parent organization. He cannot sign, export, or change anything in the sub-organization. The app's users will have no email or phone attached, so there is nothing for parent-initiated recovery to target. Phase 1 confirms this by having Will try to sign, through the dashboard or the API, and fail. One power the parent does keep: it can delete the sub-organization, which would destroy the keys. That is a way to lose funds, not steal them, and it is listed under simplifications.
 
@@ -158,6 +167,8 @@ It also keeps a list of deposits already credited, so none counts twice, the nex
 
 - Sepolia: full finality takes about 15 minutes, too slow for a live demo. The demo waits for 3 blocks (about 36 seconds) and says so on screen.
 - Base Sepolia: blocks arrive every 2 seconds, so 10 blocks (about 20 seconds) is the wait.
+
+**When a provider fails.** An unanswered second opinion means try again later, never "not a deposit." Each chain lists fallback providers, tried in order; rpc.sepolia.org went dead on Sept 24 and caused one skipped deposit before this fix. A deposit a scan missed can be credited by its transaction hash, still checked by two providers and credited only once.
 
 **Trading.** Transfers between users simply move numbers on the ledger. Swaps use a simple automated pool, the same pricing formula Uniswap uses, seeded with Sepolia ETH and Base Sepolia ETH that Will deposits as the liquidity provider. Because both assets are test ETH, the pool starts near 1:1 and the price moves with trades, which makes the mechanics easy to see. Both happen instantly because nothing touches a blockchain.
 
@@ -221,9 +232,10 @@ The user sees three states: Pending, Sent (with an explorer link), and Complete.
 A single page anyone can open, built for the Bryce conversation. Everything on it is fetched live, not typed in:
 
 1. **Attestation:** the ROFL app ID, the exact code version running, and a link to its registration on the Oasis explorer.
-2. **Who controls the keys:** the Turnkey sub-organization's users (app admin, app signer), its root quorum (app admin only), and the signer's policies, read directly from Turnkey.
+2. **Who controls the keys:** the vault's users (app admin, app signer), its root quorum (app admin only), and the signer's policies, plus the sign-up user's single policy in Will's organization, all read directly from Turnkey.
 3. **Solvency:** the vault's on-chain balances beside the ledger totals.
 4. **Signing history:** recent Turnkey signing activity, each linked to its on-chain transaction.
+5. **Live checks:** buttons that ask for something forbidden and show Turnkey's refusal with its activity ID: the vault signer tries to export the wallet; it tries to sign on a network it is not allowed; the sign-up key tries to add a policy or sign with Will's own wallet (the refusal shows in Will's own Activity Log); and an old request is replayed (Crossroads' own check). Nothing is ever tried with the vault admin, which is root and would succeed.
 
 ## UI and UX
 
@@ -236,7 +248,7 @@ One page for trading, a narration panel beside it, and a separate proof page, de
 3. Rules enforced outside the app: on each withdrawal the panel shows "Policy check passed: 0.01 ETH under the 0.05 cap. Signed by Turnkey in 0.4 s."
 4. Turnkey saying no: the user types 0.06 ETH into the normal Withdraw form. The app has no limit of its own, so the request reaches Turnkey, which refuses it. The page shows the refusal, and the rejected signature sits in the Turnkey dashboard with the 0.05 ETH policy marked Denied. This is the single strongest moment in the demo, because the limit lives in Turnkey, not in the app.
 5. Two kinds of key, one provider: every trade shows "signed by your wallet," every withdrawal shows "signed by the vault," and the panel names which Turnkey key did each.
-6. A full audit trail: every panel entry links to the Turnkey activity and, for on-chain actions, the explorer.
+6. A full audit trail: every Turnkey entry names the key that acted and shows its activity ID (click to copy; it matches the dashboard's Activities), withdrawals name the policy that allowed or denied them, on-chain actions link to the explorer, and a "What just happened" card walks through the latest action step by step (built Sept 24).
 
 **Keeping it simple:** no passwords or extensions (Google is the login), one asset pair, everything on one screen, two demo personas as two Google accounts, deposits made before the call so nothing waits on camera, and no charts or settings. MetaMask appears only as the outside wallet funds come from and go to.
 
@@ -282,6 +294,8 @@ Eight phases over seven days, with the must-have demo running in ROFL by Sep 28,
 | 4. Base Sepolia and swaps | Base Sepolia deposits and withdrawals from the same addresses, swap pool, add-liquidity tab | A Sepolia-to-Base swap and a Base withdrawal both work in ROFL | Seeds the pool with his own deposits | Sep 29, 2026 |
 | 5. Proof page and rehearsal | Proof page, Under the hood panel polish | Two full walkthroughs run cleanly | Rehearses the walkthrough twice | Sep 30, 2026 |
 
+**Status (Sept 24, session 3).** Phases 0b, 1, 2, 2b and 3 are done and live at https://p8080.m1742.opf-testnet-rofl-9.rofl.app with Google sign-in and the enclave-created Turnkey vault; the 0.07 ETH refusal ran live. Still open: a successful live withdrawal and a send between two accounts; per-network limits; Phase 4's Base Sepolia run and pool seeding (needs Base Sepolia ETH); Phase 5's proof page with live checks (the on-screen annotations are done); a recorded rehearsal.
+
 Phase 3 repeats the Turnkey setup on purpose. The keys used on a laptop in phases 1 and 2 are stand-ins, so a fresh sub-organization is created once the real keys exist inside the enclave.
 
 Claude writes all code and explains each phase in plain terms at the end. Will's hands-on parts are chosen so he has personally touched every Turnkey concept he may be asked about.
@@ -326,11 +340,12 @@ The biggest schedule risk is Solana, and every risk below has a fallback that st
 | Google sign-in flow takes longer than a day | Fall back to a stand-in login for the must-have demo and keep the vault side unchanged; the Turnkey story loses the embedded-wallet half but nothing else |
 | Base Sepolia phase runs long | Present the Sepolia-only must-have demo; transfers between users still show instant settlement |
 | ROFL testnet machine rental expires mid-demo (the Oasis-run testnet node is [rented an hour at a time](https://docs.oasis.io/build/use-cases/trustless-agent) unless topped up) | Top up before every demo and keep a recorded rehearsal as a backup |
-| Six days of ROFL uptime needs more test tokens than the 150 starting estimate | Hit the faucet several times on day 0 and ask in the Oasis Discord if it caps out |
+| Keeping the machine up costs 5 TEST an hour (about 120 a day) on the Oasis-run provider, and a lapsed machine comes back with a new address and an empty ledger | Top up before Paid until with the deploy workflow's top-up mode. A third-party testnet provider rents a similar machine for 50 TEST a month (declined Sept 24 in favor of the Oasis-run one) |
 | Rehearsals exceed Turnkey's 25 free signatures, which they will | Add a card for pay-as-you-go; expect $5 to $10 total |
 | Testnet faucets are rate-limited, and some Sepolia faucets require a small mainnet ETH balance | Request funds on day 0 and try more than one faucet; Base Sepolia ETH can also be bridged from Sepolia |
 | Turnkey API keys use a standard curve and ROFL hands the app raw key material | The app derives a standard Turnkey key from that material; Phase 1 confirms Turnkey accepts it |
 | One network provider is down or slow | Configure three providers per chain and require two to agree |
+| A free public network provider stops answering (rpc.sepolia.org did on Sept 24) | Fallback providers are tried in order and a missed deposit can be credited by its transaction; a free keyed provider (Alchemy) as the primary would be sturdier |
 
 **Open questions**
 
@@ -341,12 +356,12 @@ The biggest schedule risk is Solana, and every risk below has a fallback that st
 **Will's checklist for Phase 0**
 
 - [x] Create a Turnkey account through the dashboard, secured with a passkey, and add a card for pay-as-you-go
-- [ ] Get about 0.3 Sepolia ETH from a faucet into MetaMask (some faucets need a small mainnet balance; try more than one)
+- [x] Get about 0.3 Sepolia ETH from a faucet into MetaMask (some faucets need a small mainnet balance; try more than one)
 - [ ] Get about 0.1 Base Sepolia ETH, from a Base faucet or by bridging some Sepolia ETH through the official Base testnet bridge
 - [x] Get Oasis testnet tokens from faucet.testnet.oasis.io, choosing Sapphire; request several times, aiming for 300 or more
 - [ ] Create a free account with one Ethereum network provider that serves both Sepolia and Base Sepolia
 - [x] Provide a Google sign-in Client ID (reusing the SimpleBlueprints Google client)
-- [ ] Send about 150 Oasis testnet tokens to the GitHub deploy wallet (in session 3); nothing is installed locally
+- [x] Send about 150 Oasis testnet tokens to the GitHub deploy wallet (in session 3); nothing is installed locally
 - [ ] Record one full rehearsal once the demo runs in ROFL, as the backup
 - [x] Join the TVC waitlist and mention the demo to your Turnkey contact
 

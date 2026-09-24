@@ -59,3 +59,23 @@ Added at close-out (insert-only commit, 4 lines added, 0 removed):
 ## Lessons
 - Turnkey's policy language accepted the conditions as written: `activity.type`, `wallet.id`, numeric `eth.tx.chain_id` comparisons, and `eth.tx.value` compared against wei.
 - Signing a test transaction with an absurd transaction number is a clean way to check policies live: the allowed signature can never be used on-chain, and nothing is broadcast.
+
+## Decisions made after close-out (Sept 24, same chat). T04 starts here
+1. Sign-in is Google, not passkeys. Each user gets a Turnkey wallet through Turnkey's Google sign-in, and a short-lived session signs requests, so every action is one click. MetaMask stays only the outside wallet for deposits and withdrawals.
+   - Google Client ID: 295336183237-90umhku3e7jck9tktd5dikc6ru7bc2he.apps.googleusercontent.com. It is not secret.
+   - It is SimpleBlueprints' existing Google client, which Will chose to reuse. Google's sign-in window will therefore show the SimpleBlueprints name.
+   - Will must add each Crossroads address (the ROFL URL after the first deploy) to its Authorized JavaScript origins.
+   - Google sign-in can only be tested by Will in a real browser, so it is first exercised on the ROFL URL.
+2. One Withdraw button. Remove Try to break it, and remove the app's own per-withdrawal cap, so Turnkey's policy is the only limit. Typing 0.06 ETH into Withdraw gets Turnkey's refusal, which Will then finds in his dashboard (vault, then Activities).
+3. Deploy through GitHub Actions; Will installs nothing (no Docker, Oasis CLI, Docker Hub or Node.js). A workflow:
+   - builds the image and pushes it to ghcr.io;
+   - builds the ROFL bundle with the rofl-dev image;
+   - runs `oasis rofl create/update/deploy` with a deploy wallet whose key is a GitHub repo secret.
+   Will funds that wallet with TEST from MetaMask. The deploy wallet becomes the ROFL app admin. The laptop backup becomes a recorded rehearsal.
+4. Suggested T04 order:
+   1. the deploy workflow, and a first deploy of the current app;
+   2. one Withdraw button;
+   3. Google sign-in;
+   4. Will adds the ROFL URL to the Google client and tests sign-in;
+   5. update the SoW for all of the above.
+

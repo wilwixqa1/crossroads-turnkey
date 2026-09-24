@@ -12,7 +12,7 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 - [ ] Update the SoW for Google sign-in, one Withdraw button, and GitHub Actions deploys.
 - [ ] Move into ROFL (Phase 3): Dockerfile (must run `npm run build`, which bundles the page), rofl.yaml, secrets, persistent volume at STATE_PATH, keys from rofl-appd (feed their raw bytes to `apiKeyFromRaw`), redo vault setup with enclave keys. Setup today reads the app's keys from the local folder; for ROFL it must instead take the admin public key the running app shows, and the app bootstraps the rest itself on start.
 - [ ] Base Sepolia and swaps (Phase 4): code and page done and tested on local chains; needs Will's pool seeding (set LIQUIDITY_PROVIDER to his account ID) and a real end-to-end check.
-- [ ] Proof page (Phase 5): attestation, key control (live from Turnkey: the vault's users, root quorum, and the two policies), solvency, signing history, and a header link to it. Try to break it already lives on the Withdraw tab.
+- [ ] Proof page (Phase 5): attestation, key control (live from Turnkey: the vault's users, root quorum, and the two policies), solvency, signing history, and a header link to it.
 
 ## Later / optional
 

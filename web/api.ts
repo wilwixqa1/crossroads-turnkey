@@ -81,7 +81,7 @@ export interface HoodEntry {
   text: string;
   link?: string;
   ms?: number;
-  source: "turnkey" | "chain" | "ledger";
+  source: "turnkey" | "wallet" | "chain" | "ledger";
 }
 
 export class ApiError extends Error {

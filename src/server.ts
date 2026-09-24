@@ -130,8 +130,8 @@ server.post<{ Body: { oidcToken: string; publicKey: string } }>("/api/auth/googl
     reply.status(401);
     return { error: `Turnkey did not accept this Google sign-in: ${(err as Error).message}`, code: "LOGIN_REFUSED" };
   }
-  if (s.created) app.log({ source: "turnkey", account: s.address, text: `Turnkey created your wallet: a sub-organization of your own (${s.organizationId}) whose only way in is your Google account. Address ${s.address}.`, ms: s.ms.create });
-  app.log({ source: "turnkey", account: s.address, text: `Turnkey checked your Google sign-in and opened a session for this browser's key. Each request you make is signed by your wallet through that session.`, ms: s.ms.login });
+  if (s.created) app.log({ source: "wallet", account: s.address, text: `Turnkey created your wallet: a sub-organization of your own (${s.organizationId}) whose only way in is your Google account. Address ${s.address}.`, ms: s.ms.create });
+  app.log({ source: "wallet", account: s.address, text: `Turnkey checked your Google sign-in and opened a session for this browser's key. Each request you make is signed by your wallet through that session.`, ms: s.ms.login });
   const existing = app.ledger.state.accounts[s.address];
   if (!existing) await app.signUp(s.address, s.name);
   return { organizationId: s.organizationId, address: s.address, name: existing?.name ?? s.name, session: s.session, expiresAt: s.expiresAt, created: s.created };

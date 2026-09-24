@@ -357,7 +357,7 @@ function renderHood() {
   const key = JSON.stringify(state.hood.map((h) => [h.at, h.text]));
   if (key === state.rendered.hood) return;
   state.rendered.hood = key;
-  const label = { turnkey: vaultLabel(), chain: "Network", ledger: "Ledger" };
+  const label = { turnkey: vaultLabel(), wallet: "Turnkey: your wallet", chain: "Network", ledger: "Ledger" };
   el.innerHTML = state.hood.length
     ? state.hood
         .map(

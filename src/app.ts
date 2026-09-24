@@ -44,7 +44,8 @@ export interface HoodEntry {
   text: string;
   link?: string;
   ms?: number;
-  source: "turnkey" | "chain" | "ledger";
+  /** turnkey: the vault (Turnkey, or the stand-in). wallet: the user's own Turnkey wallet. */
+  source: "turnkey" | "wallet" | "chain" | "ledger";
 }
 
 const ACTION_NAMES: Record<SignedRequest["action"], string> = {

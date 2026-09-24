@@ -8,6 +8,7 @@ Actionable work only, roughly in order. Facts that are not work live as comments
   1. sign in as wil wix once (that account is not in the fresh ledger yet);
   2. as William Wendt, send wil wix 0.01;
   3. withdraw 0.01 Sepolia ETH to MetaMask. A successful vault-signed withdrawal has not run on a real network yet; watch it end to end.
+- [ ] Expired sign-in handling: the Google session key expires after 8 hours, but a tab left open keeps using it and shows a raw "Turnkey error 16: expired api key". Check the session's expiry before signing and on API_KEY_EXPIRED, clear the saved session and return to Continue with Google with a plain message. Also consider a longer session for demo day.
 - [ ] Per-network withdrawal limits (decided): 0.05 ETH on Sepolia, 0.02 ETH on Base Sepolia. One limit per network in settings; the Withdraw form shows the selected network's limit; on start the app (vault admin, not locked) replaces the vault's limit policies with per-network ones. No Will key needed. Update the policy-name text the page shows.
 - [ ] Proof page (Phase 5), linked from the header:
   - code version: ROFL app ID, enclave identity and image digest from the committed manifest, explorer link;

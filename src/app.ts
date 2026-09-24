@@ -18,7 +18,10 @@ import { EvmChain, VaultRefusal } from "./chains/evm.js";
 import type { Vault } from "./signer/index.js";
 import { loadState, saveState, type AppState } from "./storage/state.js";
 
-/** Per-withdrawal cap enforced by the app. Turnkey's policy enforces the same cap independently. */
+/**
+ * The vault's per-withdrawal limit. Only the vault enforces it (Turnkey's policy, or the stand-in imitating
+ * it); the app has no limit of its own, so an over-limit request is locked, sent to the vault, and refused there.
+ */
 export const WITHDRAWAL_CAP = parseEther(process.env.WITHDRAWAL_CAP_ETH ?? "0.05");
 
 export interface AppOptions {
@@ -138,12 +141,8 @@ export class App {
       }
       case "withdraw": {
         const amount = BigInt(p.amount);
-        // NEXT PERSON: the app cap is the first gate; Turnkey's policy is the second. bypassAppCap exists
-        // only so the "Try to break it" button can reach Turnkey's refusal. Never set it from the normal UI path.
-        if (amount > WITHDRAWAL_CAP) {
-          // Deliberately let "Try to break it" through to Turnkey? No: the ledger refuses first unless the request says so.
-          if (p.bypassAppCap !== "true") throw new LedgerError("Above the app's per-withdrawal cap", "CAP");
-        }
+        // NEXT PERSON: no limit check here on purpose. The vault's policy is the only limit, so the demo's
+        // over-limit refusal visibly comes from Turnkey. Do not add an app-side cap back.
         const chain = this.chains.get(asset)!;
         const fee = await chain.estimateWithdrawalFee();
         const w = this.ledger.requestWithdrawal(acct.id, asset, amount, fee, p.destination);
@@ -267,8 +266,8 @@ export class App {
           break;
         }
       }
-      // NEXT PERSON: this funds check runs before the vault is asked to sign, so "Try to break it" only reaches
-      // the vault's policy when one vault address really holds more than the cap plus fee on that chain.
+      // NEXT PERSON: this funds check runs before the vault is asked to sign, so an over-limit withdrawal only
+      // reaches the vault's policy when one vault address really holds more than the amount plus fee on that chain.
       if (!from) {
         this.ledger.failWithdrawal(w.id, "No single vault address holds enough on this chain");
         this.log({ source: "ledger", account: w.account, text: `Withdrawal #${w.id} not sent: no single vault address holds enough on ${chainName} (needs rebalancing). Funds unlocked.` });

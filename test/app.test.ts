@@ -101,14 +101,13 @@ describe("signed requests through the app", () => {
 });
 
 describe("withdrawals", () => {
-  it("Try to break it: the app skips its own cap, the vault refuses, and the funds come back", async () => {
+  it("an over-limit withdrawal is locked, reaches the vault, is refused there, and the funds come back", async () => {
     build();
     useClients("ETH_SEPOLIA", fakeClient());
     const alice = await user("Alice");
     app.ledger.creditDeposit("ETH_SEPOLIA", "0xd1", alice.depositAddress, parseEther("0.1"));
     const params = { asset: "ETH_SEPOLIA", amount: parseEther("0.06").toString(), destination: OUTSIDE };
-    await expect(alice.send("withdraw", params)).rejects.toThrow(/cap/);
-    await alice.send("withdraw", { ...params, bypassAppCap: "true" });
+    await alice.send("withdraw", params);
     expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA.pending).toBeGreaterThan(0n);
     await app.processWithdrawals();
     const acct = app.ledger.getAccount(alice.id);

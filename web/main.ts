@@ -386,17 +386,11 @@ function renderPanel() {
         </div>
         <label>To address <input name="destination" value="${esc(lastDest)}" placeholder="0x… such as your MetaMask address" autocomplete="off" spellcheck="false" class="mono"></label>
         <p class="hint" data-hint="available"></p>
-        <p class="note">The app locks the amount plus a network fee reserve before anything is signed. The unused part of the fee comes back when the withdrawal confirms. Limit: ${cap} ETH per withdrawal.</p>
+        <p class="note">The app locks the amount plus a network fee reserve before anything is signed. The unused part of the fee comes back when the withdrawal confirms.</p>
+        <p class="note">Withdrawals are limited to ${cap} ETH each by ${vault}'s own policy. This app has no limit of its own.</p>
         <button type="submit" class="primary">Withdraw</button>
         <p class="status" data-status role="status"></p>
-      </form>
-      <div class="breakit">
-        <h3>Try to break it</h3>
-        <p>Ask ${vault} to sign a withdrawal above its ${cap} ETH limit. The app skips its own limit check, so the request goes all the way to ${vault}'s policy.</p>
-        <button type="button" id="breakit" class="danger">Try to break it</button>
-        <p class="hint" data-hint="break"></p>
-        <p class="status" id="break-status" role="status"></p>
-      </div>`,
+      </form>`,
     liquidity: `
       <form id="f-liquidity" novalidate>
         <p>Move part of your own balance into the swap pool. The pool's two balances set the swap price.</p>
@@ -414,31 +408,12 @@ function renderPanel() {
   renderHints();
 }
 
-/** Break-it amount: just over the cap, so the refusal is clearly about the limit and nothing else. */
-function breakAmount(): bigint {
-  return BigInt(state.status?.withdrawalCap ?? "0") + 10n ** 16n;
-}
-
 function renderHints() {
   const form = $<HTMLFormElement>("#panel form");
   if (form) {
     const sel = form.querySelector<HTMLSelectElement>("select[name=asset], select[name=assetIn]");
     const hint = form.querySelector("[data-hint=available]");
     if (sel && hint) hint.textContent = `Available: ${fmtEth(available(sel.value as Asset))} ${ASSET_NAMES[sel.value as Asset]}`;
-  }
-  const breakBtn = $<HTMLButtonElement>("#breakit");
-  const breakHint = $("[data-hint=break]");
-  if (breakBtn && breakHint) {
-    const asset = ($<HTMLSelectElement>("#f-withdraw select[name=asset]")?.value ?? "ETH_SEPOLIA") as Asset;
-    const need = breakAmount();
-    const dest = $<HTMLInputElement>("#f-withdraw input[name=destination]")?.value ?? "";
-    const enough = available(asset) > need;
-    breakBtn.disabled = state.busy || !enough || !isAddress(dest);
-    breakHint.textContent = !enough
-      ? `Needs more than ${fmtEth(need)} ${ASSET_NAMES[asset]} available on ${chainName(asset)}, because the app still locks the funds first.`
-      : !isAddress(dest)
-        ? "Fill in the To address above first."
-        : `Requests ${fmtEth(need)} ETH on ${chainName(asset)} to the address above.`;
   }
 }
 
@@ -558,20 +533,6 @@ async function onSubmit(form: HTMLFormElement) {
   }
 }
 
-async function breakIt() {
-  const form = $<HTMLFormElement>("#f-withdraw");
-  const out = $("#break-status");
-  if (!form) return;
-  const asset = (form.elements.namedItem("asset") as HTMLSelectElement).value as Asset;
-  const destination = (form.elements.namedItem("destination") as HTMLInputElement).value.trim();
-  const amount = breakAmount();
-  // NEXT PERSON: this is the only place bypassAppCap may be sent. The app's own cap check is skipped on
-  // purpose so the refusal visibly comes from the vault's policy, not from the app.
-  await submit("withdraw", { asset, amount: amount.toString(), destination, bypassAppCap: "true" }, out, () =>
-    `Asked ${vaultName()} to sign ${fmtEth(amount)} ETH. Watch Under the hood for its answer.`,
-  );
-}
-
 // ---------- data loop ----------
 
 async function refresh() {
@@ -635,8 +596,6 @@ root.addEventListener("click", async (ev) => {
     renderLogin();
   } else if (t.id === "theme") {
     setTheme(currentTheme() === "dark" ? "light" : "dark");
-  } else if (t.id === "breakit") {
-    void breakIt();
   }
 });
 

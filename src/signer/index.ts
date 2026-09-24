@@ -28,8 +28,8 @@ export class LocalVault implements Vault {
   private nextIndex: number;
 
   /**
-   * @param cap Per-transaction limit the stand-in enforces, imitating the Turnkey signer policy, so the
-   *            "Try to break it" path can be exercised on a laptop without sending an over-cap withdrawal.
+   * @param cap Per-transaction limit the stand-in enforces, imitating the Turnkey signer policy, so an
+   *            over-limit withdrawal is refused on a laptop the same way Turnkey refuses it.
    */
   constructor(private mnemonic: string, existingAddresses: string[] = [], private cap?: bigint) {
     // Re-derive any addresses the ledger already knows so restarts keep working.

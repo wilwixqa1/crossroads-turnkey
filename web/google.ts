@@ -8,7 +8,7 @@
  */
 import { IndexedDbStamper } from "@turnkey/indexed-db-stamper";
 import { TurnkeyClient } from "@turnkey/http";
-import { hashMessage, serializeSignature, type Hex } from "viem";
+import { getAddress, hashMessage, serializeSignature, type Hex } from "viem";
 import type { RequestSigner } from "./signer.js";
 
 const TURNKEY_API = "https://api.turnkey.com";
@@ -84,7 +84,8 @@ export function turnkeySigner(s: GoogleSession): RequestSigner {
         type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2",
         timestampMs: String(Date.now()),
         organizationId: s.organizationId,
-        parameters: { signWith: s.address, payload: hashMessage(message), encoding: "PAYLOAD_ENCODING_HEXADECIMAL", hashFunction: "HASH_FUNCTION_NO_OP" },
+        // NEXT PERSON: the ledger keeps addresses lowercase, but Turnkey only finds the wallet by its checksummed form.
+        parameters: { signWith: getAddress(s.address), payload: hashMessage(message), encoding: "PAYLOAD_ENCODING_HEXADECIMAL", hashFunction: "HASH_FUNCTION_NO_OP" },
       });
       const sig = res.activity.result.signRawPayloadResult;
       if (res.activity.status !== "ACTIVITY_STATUS_COMPLETED" || !sig) throw new Error(`Turnkey did not sign (${res.activity.status})`);

@@ -1,0 +1,111 @@
+name: deploy
+# Puts the current main branch on Oasis ROFL testnet. Started by hand (Actions tab > deploy > Run workflow,
+# or the API), never on push, because every run spends the deploy wallet's TEST.
+#   deploy: build the image, register the ROFL app if needed, publish the new version, run it on the machine.
+#   top-up: only add machine hours (keeps the same machine, URL and saved ledger).
+#   status: show the machine and the app, spend nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to do
+        type: choice
+        options: [deploy, top-up, status]
+        default: deploy
+      hours:
+        description: Machine hours to pay for (first rental or top-up; 5 TEST each on the Oasis-run testnet provider)
+        default: "4"
+
+concurrency:
+  group: rofl-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  OASIS_CLI_VERSION: 0.20.0
+  IMAGE: ghcr.io/wilwixqa1/crossroads-turnkey
+
+jobs:
+  rofl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Oasis CLI
+        run: |
+          curl -sSL "https://github.com/oasisprotocol/cli/releases/download/v${OASIS_CLI_VERSION}/oasis_cli_${OASIS_CLI_VERSION}_linux_amd64.tar.gz" | tar xz
+          sudo install "oasis_cli_${OASIS_CLI_VERSION}_linux_amd64/oasis" /usr/local/bin/oasis
+          oasis network set-default testnet
+
+      - name: Load the deploy wallet
+        env:
+          KEY: ${{ secrets.DEPLOY_WALLET_KEY }}
+        run: |
+          oasis wallet import deployer --algorithm secp256k1-raw --secret "$KEY" -y </dev/null >/dev/null
+          oasis wallet set-default deployer
+          oasis wallet list
+
+      - name: Build and push the Crossroads image
+        if: inputs.mode == 'deploy'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          TAG="$IMAGE:${GITHUB_SHA::12}"
+          docker build --platform linux/amd64 -t "$TAG" .
+          docker push "$TAG"
+          PINNED=$(docker inspect --format='{{index .RepoDigests 0}}' "$TAG")
+          echo "Pinned image: $PINNED"
+          # NEXT PERSON: compose.yaml has exactly one image line; this rewrites it to the build just pushed.
+          sed -i -E "s#^(    image: ).*#\1\"$PINNED\"#" compose.yaml
+          grep -n "image:" compose.yaml
+
+      - name: Register the ROFL app (first run only; 100 TEST deposit)
+        if: inputs.mode == 'deploy'
+        run: |
+          if grep -q "app_id:" rofl.yaml; then echo "Already registered"; exit 0; fi
+          oasis rofl create --account deployer -y </dev/null
+
+      - name: Build the ROFL bundle
+        if: inputs.mode == 'deploy'
+        run: oasis rofl build </dev/null
+
+      - name: Publish the new version on-chain
+        if: inputs.mode == 'deploy'
+        run: oasis rofl update --account deployer -y </dev/null
+
+      - name: Run it on the machine (rents one on the first run)
+        if: inputs.mode == 'deploy'
+        run: oasis rofl deploy --account deployer --term hour --term-count "${{ inputs.hours }}" --replace-machine -y </dev/null
+
+      - name: Record what is deployed
+        if: inputs.mode == 'deploy'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rofl.yaml compose.yaml
+          if git diff --cached --quiet; then echo "Nothing to record"; exit 0; fi
+          git commit -m "deploy: record ROFL version for ${GITHUB_SHA::12}"
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && break; sleep 5; done
+
+      - name: Add machine hours
+        if: inputs.mode == 'top-up'
+        run: oasis rofl machine top-up --account deployer --term hour --term-count "${{ inputs.hours }}" -y </dev/null
+
+      - name: Show the machine and its address
+        if: always()
+        run: |
+          oasis rofl machine show </dev/null | tee machine.txt || true
+          oasis rofl show </dev/null | tee app.txt || true
+          URL=$(grep -oE "https://p8080\.[^ ]+" machine.txt | head -1 || true)
+          {
+            echo "## Crossroads on ROFL"
+            echo ""
+            echo "Address: ${URL:-not available yet}"
+            echo ""
+            echo '```'
+            cat machine.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

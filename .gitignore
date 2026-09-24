@@ -5,3 +5,4 @@ data/
 *.log
 public/app.js
 public/app.js.map
+*.orc

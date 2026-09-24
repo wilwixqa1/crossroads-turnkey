@@ -1,0 +1,19 @@
+# What runs inside the ROFL machine. The deploy workflow rewrites the image line to the exact build it
+# just pushed (pinned by digest) and commits it back, so this file always names the version running.
+services:
+  crossroads:
+    image: "ghcr.io/wilwixqa1/crossroads-turnkey:unbuilt"
+    platform: linux/amd64
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - VAULT_MODE=local
+      - STATE_PATH=/data/state.json
+      - PORT=8080
+    volumes:
+      - crossroads-data:/data
+      - /run/rofl-appd.sock:/run/rofl-appd.sock
+
+volumes:
+  crossroads-data:

@@ -76,6 +76,8 @@ jobs:
         if: inputs.mode == 'deploy'
         run: oasis rofl update --account deployer -y </dev/null
 
+      # NEXT PERSON: if the machine has lapsed, --replace-machine rents a new one: new web address (add it to the Google
+      # client's origins), empty ledger. Top up before "Paid until" (status mode shows it) to keep the address and data.
       - name: Run it on the machine (rents one on the first run)
         if: inputs.mode == 'deploy'
         run: oasis rofl deploy --account deployer --term hour --term-count "${{ inputs.hours }}" --replace-machine -y </dev/null

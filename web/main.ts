@@ -553,6 +553,7 @@ async function submit(action: RequestAction, params: Record<string, string>, out
     const { nextSeq } = await api.account(signer.address);
     say(out, `Signing request #${nextSeq} with ${signer.description}…`);
     const signature = await signer.signMessage(requestMessage(signer.address, nextSeq, action, params));
+    // NEXT PERSON: must match the ref the app builds in handleRequest (req:<lowercase account>:<seq>), or this card never fills in.
     state.latest = { ref: `req:${signer.address}:${nextSeq}`, title: ACTION_TITLES[action] };
     renderLatest();
     const trace = signer.lastActivity ? { activityId: signer.lastActivity.id, signMs: signer.lastActivity.ms } : undefined;

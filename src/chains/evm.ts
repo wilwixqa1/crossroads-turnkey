@@ -82,17 +82,36 @@ export class EvmChain {
     return found;
   }
 
-  /** Second provider must independently report a successful transfer of the same amount to the same address. */
+  /**
+   * A second, independent provider must report a successful transfer of the same amount to the same address.
+   * The other providers are asked in order until one answers. If none answers, this throws so the scan is retried
+   * later: an unreachable provider must never count as "not a deposit".
+   */
   private async crossCheck(hash: Hex, to: string, amount: bigint): Promise<boolean> {
-    try {
-      const [receipt, tx] = await Promise.all([
-        this.secondary.getTransactionReceipt({ hash }),
-        this.secondary.getTransaction({ hash }),
-      ]);
-      return receipt.status === "success" && !!tx.to && tx.to.toLowerCase() === to && tx.value === amount;
-    } catch {
-      return false;
+    const errors: string[] = [];
+    for (const client of this.clients.slice(1)) {
+      try {
+        const [receipt, tx] = await Promise.all([client.getTransactionReceipt({ hash }), client.getTransaction({ hash })]);
+        return receipt.status === "success" && !!tx.to && tx.to.toLowerCase() === to && tx.value === amount;
+      } catch (err) {
+        errors.push((err as Error).message.split("\n")[0].slice(0, 80));
+      }
     }
+    throw new Error(`no second provider could confirm ${hash}: ${errors.join("; ")}`);
+  }
+
+  /**
+   * One deposit by its transaction hash, for crediting a deposit a scan missed. The primary provider supplies it,
+   * a second provider must agree, and it must have the chain's confirmations. Returns undefined if it is not a
+   * confirmed, successful plain transfer into one of the watched addresses.
+   */
+  async depositByHash(hash: Hex, watched: Set<string>): Promise<FoundDeposit | undefined> {
+    const [tx, receipt, latest] = await Promise.all([this.primary.getTransaction({ hash }), this.primary.getTransactionReceipt({ hash }), this.primary.getBlockNumber()]);
+    const to = tx.to?.toLowerCase();
+    if (!to || !watched.has(to) || tx.value === 0n || receipt.status !== "success") return undefined;
+    if (latest - receipt.blockNumber < BigInt(this.cfg.confirmations)) throw new Error(`not enough confirmations yet (needs ${this.cfg.confirmations})`);
+    if (!(await this.crossCheck(hash, to, tx.value))) return undefined;
+    return { asset: this.cfg.asset, txHash: tx.hash, to, from: tx.from.toLowerCase(), amount: tx.value, blockNumber: receipt.blockNumber };
   }
 
   /** Conservative fee reserve for a plain transfer, in wei. */

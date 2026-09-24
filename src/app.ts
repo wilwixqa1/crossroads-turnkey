@@ -195,6 +195,25 @@ export class App {
     }
   }
 
+  /**
+   * Credit one deposit by its transaction hash, when a scan missed it. Safe for anyone to ask: it credits only a real,
+   * confirmed transfer into a vault deposit address (checked by two providers), to that address's owner, and only once.
+   */
+  async claimDeposit(asset: Asset, txHash: string): Promise<{ credited: boolean; account?: string; amount?: string; reason?: string }> {
+    const chain = this.chains.get(asset);
+    if (!chain) throw new LedgerError(`Unknown asset ${asset}`, "BAD_ASSET");
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new LedgerError("txHash must be a transaction hash", "BAD_TX");
+    if (this.ledger.hasDeposit(asset, txHash)) return { credited: false, reason: "already credited" };
+    const d = await chain.depositByHash(txHash as `0x${string}`, new Set(this.ledger.depositAddresses()));
+    if (!d) return { credited: false, reason: "not a confirmed transfer into a Crossroads deposit address" };
+    if (this.ledger.hasDeposit(asset, d.txHash)) return { credited: false, reason: "already credited" };
+    const acct = this.ledger.creditDeposit(asset, d.txHash, d.to, d.amount);
+    this.incoming.delete(`${asset}:${d.txHash.toLowerCase()}`);
+    this.save();
+    this.log({ source: "chain", account: acct.id, text: `Deposit of ${EvmChain.fmt(d.amount)} ETH on ${chain.cfg.chain.name} confirmed by two providers and credited (claimed by its transaction)`, link: chain.cfg.explorerTx(d.txHash) });
+    return { credited: true, account: acct.id, amount: d.amount.toString() };
+  }
+
   /** Heads-up only: note deposits at the chain tip so the page can count confirmations. Never credits. */
   private async watchTip(asset: Asset, chain: EvmChain, latest: bigint, watched: Set<string>) {
     const needed = BigInt(chain.cfg.confirmations);

@@ -184,6 +184,9 @@ server.post<{ Body: Omit<SignedRequest, "signature"> }>("/api/requests/message",
 
 server.post<{ Body: SignedRequest }>("/api/requests", async (req) => app.handleRequest(req.body));
 
+/** Credit a deposit the scan missed, by its transaction. Anyone may ask; only genuine deposits are credited, once. */
+server.post<{ Body: { asset: Asset; txHash: string } }>("/api/deposits/claim", async (req) => app.claimDeposit(req.body?.asset, req.body?.txHash));
+
 server.get<{ Querystring: { assetIn: Asset; assetOut: Asset; amount: string } }>("/api/quote", async (req) => {
   const { assetIn, assetOut, amount } = req.query;
   return { amountOut: app.ledger.quote(assetIn, assetOut, BigInt(amount)).toString() };

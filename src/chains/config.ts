@@ -20,14 +20,16 @@ export const CHAINS: ChainConfig[] = [
   {
     asset: "ETH_SEPOLIA",
     chain: sepolia,
-    rpcUrls: urls("SEPOLIA_RPC_URLS", ["https://ethereum-sepolia-rpc.publicnode.com", "https://rpc.sepolia.org"]),
+    // NEXT PERSON: rpc.sepolia.org stopped answering (Sept 2026). Providers after the first are tried in order for the
+    // second opinion, so one dead provider no longer blocks deposits. A keyed provider (Alchemy etc.) is sturdier.
+    rpcUrls: urls("SEPOLIA_RPC_URLS", ["https://ethereum-sepolia-rpc.publicnode.com", "https://sepolia.gateway.tenderly.co", "https://rpc.sepolia.ethpandaops.io"]),
     confirmations: Number(process.env.SEPOLIA_CONFIRMATIONS ?? 3),
     explorerTx: (h) => `https://sepolia.etherscan.io/tx/${h}`,
   },
   {
     asset: "ETH_BASE_SEPOLIA",
     chain: baseSepolia,
-    rpcUrls: urls("BASE_SEPOLIA_RPC_URLS", ["https://base-sepolia-rpc.publicnode.com", "https://sepolia.base.org"]),
+    rpcUrls: urls("BASE_SEPOLIA_RPC_URLS", ["https://base-sepolia-rpc.publicnode.com", "https://sepolia.base.org", "https://base-sepolia.drpc.org"]),
     confirmations: Number(process.env.BASE_SEPOLIA_CONFIRMATIONS ?? 10),
     explorerTx: (h) => `https://sepolia.basescan.org/tx/${h}`,
   },

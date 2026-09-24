@@ -45,8 +45,7 @@ function build(opts: { liquidityProvider?: string } = {}) {
 
 function useClients(asset: Asset, primary: Fake, secondary: Fake = fakeClient()) {
   const chain = app.chains.get(asset)!;
-  chain.clients[0] = primary as unknown as PublicClient;
-  chain.clients[1] = secondary as unknown as PublicClient;
+  chain.clients.splice(0, chain.clients.length, primary as unknown as PublicClient, secondary as unknown as PublicClient);
 }
 
 async function user(name: string) {
@@ -181,5 +180,45 @@ describe("deposits", () => {
     await app.pollDeposits("ETH_SEPOLIA");
     expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA.available).toBe(parseEther("0.02"));
     expect(app.incomingFor(alice.id)).toEqual([]);
+  });
+
+  it("does not skip a deposit when the second provider is unreachable: it retries, then credits", async () => {
+    build();
+    let head = 1000n;
+    const blocks = new Map<bigint, unknown[]>();
+    const primary = fakeClient({ getBlockNumber: async () => head, getBlock: async (a: { blockNumber: bigint }) => ({ transactions: blocks.get(a.blockNumber) ?? [] }) });
+    const alice = await user("Alice");
+    const tx = { hash: "0xdef", to: alice.depositAddress, from: OUTSIDE, value: parseEther("0.1") };
+    let down = true;
+    const secondary = fakeClient({
+      getTransactionReceipt: async () => (down ? Promise.reject(new Error("fetch failed")) : { status: "success" }),
+      getTransaction: async () => (down ? Promise.reject(new Error("fetch failed")) : tx),
+    });
+    useClients("ETH_SEPOLIA", primary, secondary);
+    await app.pollDeposits("ETH_SEPOLIA");
+    head = 1004n;
+    blocks.set(1001n, [tx]);
+    await app.pollDeposits("ETH_SEPOLIA");
+    expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA.available).toBe(0n);
+    expect(app.scanCursor.ETH_SEPOLIA).toBe(997n); // the scan did not move past the deposit
+    down = false;
+    await app.pollDeposits("ETH_SEPOLIA");
+    expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA.available).toBe(parseEther("0.1"));
+  });
+
+  it("credits a missed deposit by its transaction once, and refuses anything that is not a deposit", async () => {
+    build();
+    const alice = await user("Alice");
+    const hash = "0x" + "ab".repeat(32);
+    const tx = { hash, to: alice.depositAddress, from: OUTSIDE, value: parseEther("0.1") };
+    const client = fakeClient({ getBlockNumber: async () => 1010n, getTransaction: async () => tx, getTransactionReceipt: async () => ({ status: "success", blockNumber: 1000n }) });
+    useClients("ETH_SEPOLIA", client, client);
+    expect(await app.claimDeposit("ETH_SEPOLIA", hash)).toMatchObject({ credited: true, account: alice.id });
+    expect(await app.claimDeposit("ETH_SEPOLIA", hash)).toMatchObject({ credited: false, reason: "already credited" });
+    expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA.available).toBe(parseEther("0.1"));
+    const elsewhere = { ...tx, hash: "0x" + "cd".repeat(32), to: OUTSIDE };
+    const other = fakeClient({ getBlockNumber: async () => 1010n, getTransaction: async () => elsewhere, getTransactionReceipt: async () => ({ status: "success", blockNumber: 1000n }) });
+    useClients("ETH_SEPOLIA", other, other);
+    expect(await app.claimDeposit("ETH_SEPOLIA", elsewhere.hash)).toMatchObject({ credited: false });
   });
 });

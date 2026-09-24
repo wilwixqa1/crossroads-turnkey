@@ -6,6 +6,7 @@
 import { requestMessage, type RequestAction } from "../src/ledger/requests.js";
 import { api, ApiError, type AccountView, type Asset, type FeedEvent, type HoodEntry, type Status } from "./api.js";
 import { standIn, type RequestSigner, type StandInAccount } from "./signer.js";
+import { googleSession, renderGoogleButton, turnkeySigner } from "./google.js";
 import { fmtClock, fmtEth, fmtMs, isAddress, parseEthInput, shortAddr, spotRate } from "./format.js";
 
 const ASSET_NAMES: Record<Asset, string> = { ETH_SEPOLIA: "Sepolia ETH", ETH_BASE_SEPOLIA: "Base ETH" };
@@ -17,7 +18,7 @@ const TAB_NAMES: Record<Tab, string> = { deposit: "Deposit", swap: "Swap", send:
 
 const state = {
   status: null as Status | null,
-  me: null as { acct: StandInAccount; signer: RequestSigner } | null,
+  me: null as { acct: { name: string; address: string }; signer: RequestSigner } | null,
   view: null as AccountView | null,
   hood: [] as HoodEntry[],
   tab: "deposit" as Tab,
@@ -89,8 +90,11 @@ function labelThemeButton() {
 
 // ---------- login ----------
 
+const googleMode = () => state.status?.login.mode === "google";
+
 function renderLogin(message = "") {
   state.me = null;
+  if (googleMode()) return renderGoogleLogin(message);
   const saved = standIn.list();
   root.innerHTML = `
     <main class="login">
@@ -102,7 +106,7 @@ function renderLogin(message = "") {
           <input id="name" name="name" maxlength="40" autocomplete="off" required>
           <button type="submit" class="primary">Create account</button>
         </div>
-        <p class="note">Stand-in login: this creates a test key and keeps it in this browser. Phase 2b replaces it with a passkey and a Turnkey wallet.</p>
+        <p class="note">Stand-in login for laptop work: this creates a test key and keeps it in this browser. The live app signs in with Google and gives each user a Turnkey wallet.</p>
         <p class="status err" role="status">${esc(message)}</p>
       </form>
       ${
@@ -119,6 +123,39 @@ function renderLogin(message = "") {
   $<HTMLInputElement>("#name")?.focus();
 }
 
+function renderGoogleLogin(message = "") {
+  root.innerHTML = `
+    <main class="login">
+      <h1>Crossroads on Turnkey</h1>
+      <p class="lede">One balance across Sepolia and Base Sepolia. Trades and transfers settle instantly on the app's ledger. Only deposits and withdrawals touch a blockchain.</p>
+      <div class="google" id="google-button" aria-live="polite"></div>
+      <p class="note">The first time, Turnkey creates a wallet that belongs to you, opened only by your Google account. No extension, no password, no seed phrase.</p>
+      <p class="status err" role="status" id="login-status">${esc(message)}</p>
+    </main>`;
+  const el = $<HTMLElement>("#google-button");
+  const clientId = state.status?.login.googleClientId;
+  if (!el || !clientId) return;
+  renderGoogleButton(el, clientId, currentTheme(), (oidcToken, publicKey) => void googleSignIn(oidcToken, publicKey)).catch((err) => {
+    const out = $("#login-status");
+    if (out) out.textContent = (err as Error).message;
+  });
+}
+
+async function googleSignIn(oidcToken: string, publicKey: string) {
+  const out = $("#login-status");
+  if (out) {
+    out.className = "status";
+    out.textContent = "Turnkey is checking your Google sign-in and opening your wallet…";
+  }
+  try {
+    const s = await api.googleSignIn(oidcToken, publicKey);
+    googleSession.save(s);
+    await enter({ name: s.name, address: s.address }, turnkeySigner(s));
+  } catch (err) {
+    renderLogin((err as Error).message);
+  }
+}
+
 async function login(acct: StandInAccount) {
   try {
     await api.account(acct.address);
@@ -128,7 +165,13 @@ async function login(acct: StandInAccount) {
     else throw err;
   }
   standIn.setCurrent(acct.address);
-  state.me = { acct, signer: standIn.signer(acct) };
+  await enter(acct, standIn.signer(acct));
+}
+
+/** Opens the trading screen for a signed-in account, whichever way it signed in. */
+async function enter(acct: { name: string; address: string }, signer: RequestSigner) {
+  await api.account(acct.address);
+  state.me = { acct, signer };
   state.view = null;
   state.hood = [];
   state.tab = "deposit";
@@ -145,6 +188,15 @@ async function createAccount(name: string) {
 
 // ---------- main screen ----------
 
+/** One line under the header saying what is real and what is a stand-in. */
+function banner(s: Status): string {
+  const google = s.login.mode === "google";
+  if (s.mode === "turnkey" && google) return "Your account is your own Turnkey wallet, and the vault is Turnkey. Neither key is held by this app.";
+  if (s.mode === "turnkey") return "The vault is Turnkey. The login is a stand-in: your key lives in this browser.";
+  if (google) return "Your account is your own Turnkey wallet. The vault is still a stand-in inside the app.";
+  return "Stand-in mode: your login key lives in this browser and the vault keys live in the app.";
+}
+
 function renderShell() {
   const s = state.status!;
   const me = state.me!;
@@ -156,15 +208,11 @@ function renderShell() {
       <div class="who">
         <span class="name">${esc(me.acct.name)}</span>
         <button type="button" class="link" data-copy="${me.signer.address}" title="${me.signer.address}">Copy account ID</button>
-        <button type="button" class="link" id="switch">Switch account</button>
+        ${googleMode() ? `<button type="button" class="link" id="signout">Sign out</button>` : `<button type="button" class="link" id="switch">Switch account</button>`}
         <button type="button" class="link" id="theme"></button>
       </div>
     </header>
-    <p class="standin">${
-      s.mode === "local"
-        ? "Stand-in mode: your login key lives in this browser and the vault keys live in the app. Turnkey takes over both in Phases 1 and 2b."
-        : "The vault is Turnkey. The login is still a stand-in: your key lives in this browser until passkey wallets arrive in Phase 2b."
-    }</p>
+    <p class="standin">${banner(s)}</p>
     <p class="offline" id="offline" hidden>Cannot reach the app. Retrying.</p>
     <div class="layout">
       <main class="trade">
@@ -594,6 +642,8 @@ root.addEventListener("click", async (ev) => {
   if (t.id === "switch") {
     standIn.setCurrent(null);
     renderLogin();
+  } else if (t.id === "signout") {
+    void googleSession.clear().finally(() => renderLogin());
   } else if (t.id === "theme") {
     setTheme(currentTheme() === "dark" ? "light" : "dark");
   }
@@ -637,8 +687,15 @@ async function boot() {
     setTimeout(boot, 3000);
     return;
   }
-  const current = standIn.current();
-  if (current) await login(current).catch((err) => renderLogin((err as Error).message));
+  const session = googleMode() ? googleSession.current() : null;
+  const current = googleMode() ? null : standIn.current();
+  if (session)
+    await enter({ name: session.name, address: session.address }, turnkeySigner(session)).catch(async () => {
+      // The app started fresh since this browser signed in: signing in again recreates the account.
+      await googleSession.clear();
+      renderLogin("Please continue with Google again.");
+    });
+  else if (current) await login(current).catch((err) => renderLogin((err as Error).message));
   else renderLogin();
   setInterval(() => void refresh(), 2000);
 }

@@ -11,12 +11,16 @@ import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledg
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor } from "./chains/config.js";
 import { loadState } from "./storage/state.js";
+import { UserDirectory, loadOrCreateSignupKey, SESSION_SECONDS } from "./auth/google.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = process.env.STATE_PATH ?? join(process.cwd(), "data", "state.json");
 const PORT = Number(process.env.PORT ?? 8080);
 const VAULT_MODE = process.env.VAULT_MODE ?? "local";
 const LIQUIDITY_PROVIDER = process.env.LIQUIDITY_PROVIDER?.trim().toLowerCase() || undefined;
+/** google: Continue with Google, one Turnkey wallet per user. standin: a test key kept in the browser (laptop work). */
+const LOGIN_MODE = process.env.LOGIN_MODE ?? "standin";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID?.trim() || undefined;
 
 /**
  * The stand-in vault's key phrase: made once at random and kept beside the saved state. A fixed phrase
@@ -55,6 +59,16 @@ async function buildVault(): Promise<Vault> {
   throw new Error(`Unknown VAULT_MODE=${mode} (use local or turnkey)`);
 }
 
+function buildDirectory(): UserDirectory | undefined {
+  if (LOGIN_MODE === "standin") return undefined;
+  if (LOGIN_MODE !== "google") throw new Error(`Unknown LOGIN_MODE=${LOGIN_MODE} (use google or standin)`);
+  const parentOrg = process.env.TURNKEY_ORG_ID?.trim();
+  if (!parentOrg || !GOOGLE_CLIENT_ID) throw new Error("LOGIN_MODE=google needs TURNKEY_ORG_ID and GOOGLE_CLIENT_ID");
+  return UserDirectory.open(parentOrg, signupKey!);
+}
+
+const signupKey = LOGIN_MODE === "google" ? loadOrCreateSignupKey(dirname(STATE_PATH)) : undefined;
+const directory = buildDirectory();
 const app = new App(await buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER });
 const server = Fastify({ logger: false });
 
@@ -78,6 +92,8 @@ server.get("/api/status", async () => ({
   assets: ASSETS,
   chains: CHAINS.map((c) => ({ asset: c.asset, chainId: c.chain.id, name: c.chain.name, confirmations: c.confirmations, head: app.heads[c.asset] ?? null })),
   withdrawalCap: WITHDRAWAL_CAP.toString(),
+  // The sign-up key's public half is shown so Will can register it with the one-time sign-up setup.
+  login: { mode: LOGIN_MODE, googleClientId: GOOGLE_CLIENT_ID ?? null, signupPublicKey: signupKey?.publicKey ?? null, sessionSeconds: SESSION_SECONDS },
   liquidityProvider: LIQUIDITY_PROVIDER ?? null,
   pool: app.ledger.state.pool.reserves,
   accounts: Object.keys(app.ledger.state.accounts).length,
@@ -92,10 +108,33 @@ function decorate(e: LedgerEvent) {
 }
 
 server.post<{ Body: { id: string; name: string } }>("/api/accounts", async (req) => {
+  if (directory) throw new LedgerError("Sign in with Google: accounts are Turnkey wallets", "GOOGLE_ONLY");
   const { id, name } = req.body;
   if (!/^0x[0-9a-fA-F]{40}$/.test(id ?? "")) throw new LedgerError("id must be an address", "BAD_ID");
   if (!name?.trim()) throw new LedgerError("name required", "BAD_NAME");
   return app.signUp(id, name.trim().slice(0, 40));
+});
+
+/**
+ * Continue with Google. Turnkey finds or creates the user's wallet and opens a session for the browser's own key.
+ * The ledger account is the wallet's address, created here the first time, so sign-up costs no signature.
+ */
+server.post<{ Body: { oidcToken: string; publicKey: string } }>("/api/auth/google", async (req, reply) => {
+  if (!directory) throw new LedgerError("Google sign-in is not turned on", "NO_GOOGLE");
+  const { oidcToken, publicKey } = req.body ?? {};
+  if (!oidcToken || !publicKey) throw new LedgerError("oidcToken and publicKey are required", "BAD_LOGIN");
+  let s;
+  try {
+    s = await directory.signIn(oidcToken, publicKey);
+  } catch (err) {
+    reply.status(401);
+    return { error: `Turnkey did not accept this Google sign-in: ${(err as Error).message}`, code: "LOGIN_REFUSED" };
+  }
+  if (s.created) app.log({ source: "turnkey", account: s.address, text: `Turnkey created your wallet: a sub-organization of your own (${s.organizationId}) whose only way in is your Google account. Address ${s.address}.`, ms: s.ms.create });
+  app.log({ source: "turnkey", account: s.address, text: `Turnkey checked your Google sign-in and opened a session for this browser's key. Each request you make is signed by your wallet through that session.`, ms: s.ms.login });
+  const existing = app.ledger.state.accounts[s.address];
+  if (!existing) await app.signUp(s.address, s.name);
+  return { organizationId: s.organizationId, address: s.address, name: existing?.name ?? s.name, session: s.session, expiresAt: s.expiresAt, created: s.created };
 });
 
 server.get<{ Params: { id: string } }>("/api/accounts/:id", async (req) => {

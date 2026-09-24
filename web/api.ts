@@ -22,6 +22,7 @@ export interface Status {
   liquidityProvider: string | null;
   pool: Record<Asset, string>;
   accounts: number;
+  login: { mode: "google" | "standin"; googleClientId: string | null; signupPublicKey: string | null; sessionSeconds: number };
 }
 
 export interface Balance {
@@ -99,6 +100,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => call<Status>("/api/status"),
   account: (id: string) => call<AccountView>(`/api/accounts/${id}`),
+  googleSignIn: (oidcToken: string, publicKey: string) =>
+    call<{ organizationId: string; address: string; name: string; session: string; expiresAt: number; created: boolean }>("/api/auth/google", { method: "POST", body: JSON.stringify({ oidcToken, publicKey }) }),
   signUp: (id: string, name: string) => call<AccountView>("/api/accounts", { method: "POST", body: JSON.stringify({ id, name }) }),
   hood: (id: string) => call<HoodEntry[]>(`/api/hood?account=${encodeURIComponent(id)}`),
   quote: (assetIn: Asset, assetOut: Asset, amount: bigint) =>

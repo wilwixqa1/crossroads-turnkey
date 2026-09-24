@@ -9,6 +9,9 @@ services:
       - "8080:8080"
     environment:
       - VAULT_MODE=local
+      - LOGIN_MODE=google
+      - GOOGLE_CLIENT_ID=295336183237-90umhku3e7jck9tktd5dikc6ru7bc2he.apps.googleusercontent.com
+      - TURNKEY_ORG_ID=fa26e2cd-7656-4db6-b26f-3012c3b578e8
       - STATE_PATH=/data/state.json
       - PORT=8080
     volumes:

@@ -4,6 +4,8 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 
 ## Next up
 
+- [ ] The machine lapsed on Sept 26 and was removed (the app registration, enclave keys and vault all survive; the ledger and the web address did not). Build and test on local chains first, then deploy once, a day before the call, and keep that machine topped up through it: the next deploy rents a new machine with a new address that Will must add to the Google client's Authorized JavaScript origins.
+- [ ] Restore William Wendt's 0.1 Sepolia ETH after the new machine starts: re-link his account (0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec) to his old deposit address, vault address #0 (0x0BeAc0e5b61A8DB1d211BB638f21dFf5AF2bCEA1), then credit deposit tx 0x3024491c812a8b20c1268a16c75bb307a85ea685e7b0c51234eac9c293b1a53b by its transaction. wil wix had vault address #1 (0x0D7Bb399D1FF2138Bc023934b8F462d823CcF0dC), empty. Without this, a fresh sign-up gets a new address and the 0.1 sits unassigned in the vault.
 - [ ] Finish the first live run (Will, on the ROFL address; the 0.07 refusal is done and found in the vault's Activities):
   1. sign in as wil wix once (that account is not in the fresh ledger yet);
   2. as William Wendt, send wil wix 0.01;

@@ -433,7 +433,6 @@ function renderPanel() {
     const n = state.status?.chains.find((c) => c.asset === a)?.confirmations ?? 0;
     return `${esc(chainName(a))} deposits count after ${n} confirmations, about ${n * BLOCK_SECONDS[a]} seconds.`;
   };
-  const cap = fmtEth(state.status?.withdrawalCap ?? "0", 2);
   const others = standIn.list().filter((a) => a.address !== state.me?.signer.address);
   const lastDest = (() => {
     try {
@@ -483,7 +482,7 @@ function renderPanel() {
         <label>To address <input name="destination" value="${esc(lastDest)}" placeholder="0x… such as your MetaMask address" autocomplete="off" spellcheck="false" class="mono"></label>
         <p class="hint" data-hint="available"></p>
         <p class="note">The app locks the amount plus a network fee reserve before anything is signed. The unused part of the fee comes back when the withdrawal confirms.</p>
-        <p class="note">Withdrawals are limited to ${cap} ETH each by ${vault}'s own policy. This app has no limit of its own.</p>
+        <p class="note" data-hint="cap"></p>
         <button type="submit" class="primary">Withdraw</button>
         <p class="status" data-status role="status"></p>
       </form>`,
@@ -504,12 +503,21 @@ function renderPanel() {
   renderHints();
 }
 
+/** Each network's per-withdrawal limit, as the vault's policy sets it. */
+function capText(asset: Asset): string {
+  const cap = state.status?.withdrawalCaps?.[asset];
+  if (!cap) return "";
+  return `Withdrawals on ${chainName(asset)} are limited to ${fmtEth(cap, 2)} ETH each by ${vaultName()}'s own policy. This app has no limit of its own.`;
+}
+
 function renderHints() {
   const form = $<HTMLFormElement>("#panel form");
   if (form) {
     const sel = form.querySelector<HTMLSelectElement>("select[name=asset], select[name=assetIn]");
     const hint = form.querySelector("[data-hint=available]");
     if (sel && hint) hint.textContent = `Available: ${fmtEth(available(sel.value as Asset))} ${ASSET_NAMES[sel.value as Asset]}`;
+    const cap = form.querySelector("[data-hint=cap]");
+    if (sel && cap) cap.textContent = capText(sel.value as Asset);
   }
 }
 

@@ -9,13 +9,17 @@
  * The rest of the app only talks to this interface, so swapping them is one line.
  */
 import { mnemonicToAccount, type HDAccount } from "viem/accounts";
-import { formatEther, type Hex, type TransactionSerializable } from "viem";
+import type { Hex, TransactionSerializable } from "viem";
+import { evaluate, type ChainLimit } from "./policy.js";
+import type { AaveMarket } from "../chains/aave.js";
 
 /** What a vault reports about one call, for the page: the Turnkey activity and the policy decision. */
 export interface VaultNote {
   activityId?: string;
-  /** e.g. Allowed by "Vault signer: withdrawals on Sepolia and Base Sepolia" (0.01 ETH, within the 0.05 ETH cap) */
+  /** e.g. Allowed by "Vault signer: withdrawals on Sepolia, up to 0.05 ETH" (0.01 ETH, within the 0.05 ETH limit on Sepolia) */
   policy?: string;
+  /** A contract call as Turnkey decodes it, e.g. "Aave depositETH, 0.02 ETH, on behalf of 0x…". Plain transfers have none. */
+  call?: string;
 }
 
 /** A refusal from the vault, carrying the same note (the rejected activity and the policy that denied it). */
@@ -62,10 +66,10 @@ export class LocalVault implements Vault {
   private nextIndex: number;
 
   /**
-   * @param cap Per-transaction limit the stand-in enforces, imitating the Turnkey signer policy, so an
-   *            over-limit withdrawal is refused on a laptop the same way Turnkey refuses it.
+   * @param rules The vault signer's rules (per-network limits, Aave), imitated here so the stand-in refuses what
+   *              Turnkey would refuse. Omitted: the stand-in signs anything (unit tests only).
    */
-  constructor(private mnemonic: string, existingAddresses: string[] = [], private cap?: bigint) {
+  constructor(private mnemonic: string, existingAddresses: string[] = [], private rules?: { limits: ChainLimit[]; aave?: AaveMarket[] }) {
     // Re-derive any addresses the ledger already knows so restarts keep working.
     this.nextIndex = 0;
     // NEXT PERSON: addresses are re-derived in creation order from the mnemonic. Changing the mnemonic
@@ -90,12 +94,15 @@ export class LocalVault implements Vault {
   async signTransaction(fromAddress: string, tx: TransactionSerializable, note?: VaultNote): Promise<Hex> {
     const acct = this.accounts.get(fromAddress.toLowerCase());
     if (!acct) throw new Error(`Local vault does not hold ${fromAddress}`);
-    if (this.cap !== undefined && (tx.value ?? 0n) > this.cap) {
-      throw new VaultError(`Policy refused: ${formatEther(tx.value ?? 0n)} ETH is above the ${formatEther(this.cap)} ETH per-withdrawal cap (stand-in for Turnkey's policy)`, {
-        policy: `Denied by the stand-in's ${formatEther(this.cap)} ETH cap`,
-      });
+    if (this.rules) {
+      const v = evaluate(tx, fromAddress, this.rules.limits, this.rules.aave ?? []);
+      const standIn = (name?: string) => (name ? `"${name}" (the stand-in imitating Turnkey's policy)` : "");
+      if (!v.allowed) throw new VaultError(`Policy refused: ${v.reason}`, { policy: v.policy ? `Denied by ${standIn(v.policy)}` : "No policy allows it", call: v.call });
+      if (note) {
+        note.policy = `Allowed by ${standIn(v.policy)} (${v.reason})`;
+        note.call = v.call;
+      }
     }
-    if (note && this.cap !== undefined) note.policy = `Allowed by the stand-in's ${formatEther(this.cap)} ETH cap`;
     return acct.signTransaction(tx);
   }
 

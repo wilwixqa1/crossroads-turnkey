@@ -10,19 +10,12 @@
  *   pollDeposits()     every few seconds, per chain: heads-up at the tip, credit once confirmed
  *   processWithdrawals() sign+send pending ones, settle sent ones
  */
-import { parseEther } from "viem";
 import { Ledger, LedgerError, type Asset, type Account, type Withdrawal } from "./ledger/ledger.js";
 import { verifyRequest, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor } from "./chains/config.js";
 import { EvmChain, VaultRefusal } from "./chains/evm.js";
 import type { Vault, VaultNote } from "./signer/index.js";
 import { loadState, saveState, type AppState } from "./storage/state.js";
-
-/**
- * The vault's per-withdrawal limit. Only the vault enforces it (Turnkey's policy, or the stand-in imitating
- * it); the app has no limit of its own, so an over-limit request is locked, sent to the vault, and refused there.
- */
-export const WITHDRAWAL_CAP = parseEther(process.env.WITHDRAWAL_CAP_ETH ?? "0.05");
 
 /**
  * An account whose ledger was lost with an old machine: on its next sign-in it gets its earlier deposit address back

@@ -4,13 +4,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { english, generateMnemonic } from "viem/accounts";
-import { App, WITHDRAWAL_CAP, type RequestTrace, type RestoreEntry } from "./app.js";
+import { App, type RequestTrace, type RestoreEntry } from "./app.js";
 import { LocalVault, PendingVault, type Vault } from "./signer/index.js";
 import { TurnkeyVault, findOrCreateVault, readVaultOrgId } from "./signer/turnkey.js";
 import { loadAppKeys, roflAppId } from "./signer/keys.js";
 import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
-import { CHAINS, chainFor } from "./chains/config.js";
+import { CHAINS, chainFor, withdrawalLimits } from "./chains/config.js";
+import { AAVE_MARKETS } from "./chains/aave.js";
 import { loadState } from "./storage/state.js";
 import { UserDirectory, SESSION_SECONDS } from "./auth/google.js";
 
@@ -49,7 +50,7 @@ async function openTurnkeyVault(): Promise<TurnkeyVault> {
   const log = (line: string) => console.log(line);
   const organizationId = process.env.TURNKEY_VAULT_ORG_ID?.trim() || (parentOrg ? await findOrCreateVault(parentOrg, keys!, dir, log) : readVaultOrgId(dir));
   if (!organizationId) throw new Error("No Turnkey vault yet: set TURNKEY_ORG_ID so the app can create one, or run `npm run turnkey:setup`");
-  const vault = await TurnkeyVault.open({ organizationId, keys: { admin: keys!.admin, signer: keys!.signer }, cap: WITHDRAWAL_CAP, chainIds: CHAINS.map((c) => c.chain.id) }, log);
+  const vault = await TurnkeyVault.open({ organizationId, keys: { admin: keys!.admin, signer: keys!.signer }, limits: withdrawalLimits(), aave: AAVE_MARKETS }, log);
   const known = Object.values(loadState(STATE_PATH)?.ledger.accounts ?? {}).map((a) => a.depositAddress);
   const held = new Set(await vault.addresses());
   const stray = known.filter((a) => !held.has(a));
@@ -61,7 +62,7 @@ async function buildVault(): Promise<Vault> {
   if (VAULT_MODE === "local") {
     const known = Object.values(loadState(STATE_PATH)?.ledger.accounts ?? {}).map((a) => a.depositAddress);
     const mnemonic = process.env.LOCAL_VAULT_MNEMONIC?.trim() || localMnemonic();
-    return new LocalVault(mnemonic, known, WITHDRAWAL_CAP);
+    return new LocalVault(mnemonic, known, { limits: withdrawalLimits(), aave: AAVE_MARKETS });
   }
   if (VAULT_MODE !== "turnkey") throw new Error(`Unknown VAULT_MODE=${VAULT_MODE} (use local or turnkey)`);
   try {
@@ -118,7 +119,9 @@ server.get("/api/status", async () => ({
   vaultLabel: app.vault.label,
   assets: ASSETS,
   chains: CHAINS.map((c) => ({ asset: c.asset, chainId: c.chain.id, name: c.chain.name, confirmations: c.confirmations, head: app.heads[c.asset] ?? null })),
-  withdrawalCap: WITHDRAWAL_CAP.toString(),
+  // Each network's per-withdrawal limit, enforced only by the vault's policy.
+  withdrawalCaps: Object.fromEntries(CHAINS.map((c) => [c.asset, c.withdrawalCap.toString()])),
+  policyProblem: app.vault instanceof TurnkeyVault ? (app.vault.policyProblem ?? null) : null,
   vaultReady: !(app.vault instanceof PendingVault),
   // Public halves only. In ROFL the private halves come from the enclave's key service and never leave it.
   appKeys: keys ? { source: keys.source, vaultAdmin: keys.admin.publicKey, vaultSigner: keys.signer.publicKey, signup: keys.signup.publicKey } : null,

@@ -2,14 +2,14 @@
  * One-time vault setup, run with Will's parent-organization key (the only place that key is used).
  *
  *   1. Create the vault sub-organization with the app's admin key as its only root user.
- *   2. As the app's admin: create the vault wallet, the signer user, and the signer's two policies.
+ *   2. As the app's admin: create the vault wallet, the signer user, and the signer's policies.
  *
  * Settings: TURNKEY_ORG_ID, TURNKEY_API_PUBLIC_KEY, TURNKEY_API_PRIVATE_KEY (Will's parent org and key),
  * STATE_PATH (the app's keys and the vault ID are kept beside it). Safe to re-run: it creates only what is missing.
  */
 import { dirname, join } from "node:path";
-import { WITHDRAWAL_CAP } from "../app.js";
-import { CHAINS } from "../chains/config.js";
+import { withdrawalLimits } from "../chains/config.js";
+import { AAVE_MARKETS } from "../chains/aave.js";
 import { TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, turnkeyClient, vaultSubOrgParams, writeVaultOrgId } from "../signer/turnkey.js";
 
 const need = (name: string) => {
@@ -34,7 +34,7 @@ if (organizationId) {
 }
 
 const vault = await TurnkeyVault.open(
-  { organizationId, keys, cap: WITHDRAWAL_CAP, chainIds: CHAINS.map((c) => c.chain.id) },
+  { organizationId, keys, limits: withdrawalLimits(), aave: AAVE_MARKETS },
   (line) => console.log(line),
 );
 console.log(`\nVault ready.\n  Sub-organization: ${organizationId}\n  Wallet: ${vault.walletId}\n  Signer user: ${vault.signerUserId}\n  App admin public key: ${keys.admin.publicKey}\n  App signer public key: ${keys.signer.publicKey}`);

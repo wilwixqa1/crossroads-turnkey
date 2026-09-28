@@ -3,9 +3,8 @@
  *
  * The vault is a Turnkey sub-organization whose only root user is the app's admin key. Inside it:
  *  - one HD wallet; each user's deposit address is one more account in it, valid on every EVM chain
- *  - a signer user (the app's signer key) with zero powers except its two policies:
- *      allow: sign Ethereum transactions from the vault wallet on Sepolia or Base Sepolia, up to the cap
- *      deny:  sign anything above the cap
+ *  - a signer user (the app's signer key) with zero powers except its policies (see ./policy.ts):
+ *      plain ETH transfers up to each network's limit, Aave supply and withdraw for the vault itself, never borrow
  * The admin key sets this up and adds deposit addresses; the signer key signs withdrawals. The app never
  * sees a vault private key, and Turnkey checks the policies on every signature.
  */
@@ -14,8 +13,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 import { getPublicKey } from "@turnkey/crypto";
-import { bytesToHex, formatEther, getAddress, serializeTransaction, type Hex, type TransactionSerializable } from "viem";
+import { bytesToHex, getAddress, serializeTransaction, type Hex, type TransactionSerializable } from "viem";
 import { VaultError, type Vault, type VaultNote } from "./index.js";
+import { SIGNER_PREFIX, contractInterfaces, evaluate, signerPolicies, type ChainLimit, type PolicySpec } from "./policy.js";
+import type { AaveMarket } from "../chains/aave.js";
 
 export const TURNKEY_API = process.env.TURNKEY_API_BASE_URL ?? "https://api.turnkey.com";
 export const VAULT_WALLET_NAME = "Crossroads vault";
@@ -111,49 +112,34 @@ export function activityIdOf(res: unknown): string | undefined {
   return (res as { activity?: { id?: string } })?.activity?.id;
 }
 
-export interface PolicySpec {
-  policyName: string;
-  effect: "EFFECT_ALLOW" | "EFFECT_DENY";
-  consensus: string;
-  condition: string;
-  notes: string;
-}
-
-/** The signer's two policies. Turnkey denies anything no policy allows, and a deny beats any allow. */
-export function signerPolicies(signerUserId: string, walletId: string, cap: bigint, chainIds: number[]): PolicySpec[] {
-  const signer = `approvers.any(user, user.id == '${signerUserId}')`;
-  const isTx = "activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2'";
-  const chains = chainIds.map((id) => `eth.tx.chain_id == ${id}`).join(" || ");
-  const capEth = formatEther(cap);
-  return [
-    {
-      policyName: "Vault signer: withdrawals on Sepolia and Base Sepolia",
-      effect: "EFFECT_ALLOW",
-      consensus: signer,
-      condition: `${isTx} && wallet.id == '${walletId}' && (${chains}) && eth.tx.value <= ${cap}`,
-      notes: `The app's signer key may sign Ethereum transactions from the vault wallet on chains ${chainIds.join(", ")}, up to ${capEth} ETH each.`,
-    },
-    {
-      policyName: `Vault signer: never more than ${capEth} ETH per withdrawal`,
-      effect: "EFFECT_DENY",
-      consensus: signer,
-      condition: `${isTx} && eth.tx.value > ${cap}`,
-      notes: "Circuit breaker: holds even if the app itself asks.",
-    },
-  ];
-}
+export type { PolicySpec } from "./policy.js";
 
 /** The Turnkey calls the vault uses; a narrow slice so tests can stand in for Turnkey. */
 export type TurnkeyCalls = Pick<
   TurnkeyApiClient,
-  "getWallets" | "createWallet" | "getWalletAccounts" | "createWalletAccounts" | "getUsers" | "createUsers" | "getPolicies" | "createPolicies" | "signTransaction" | "getActivities"
+  | "getWallets"
+  | "createWallet"
+  | "getWalletAccounts"
+  | "createWalletAccounts"
+  | "getUsers"
+  | "createUsers"
+  | "getPolicies"
+  | "createPolicies"
+  | "deletePolicy"
+  | "getSmartContractInterfaces"
+  | "createSmartContractInterface"
+  | "signTransaction"
+  | "getActivities"
+  | "getPolicyEvaluations"
 >;
 
 export interface TurnkeyVaultConfig {
   organizationId: string;
   keys: AppKeys;
-  cap: bigint;
-  chainIds: number[];
+  /** One withdrawal limit per network; each becomes an allow and a deny policy. */
+  limits: ChainLimit[];
+  /** Aave markets the vault may supply to (never borrow from). */
+  aave?: AaveMarket[];
   /** Tests pass stand-ins; normally built from the keys. */
   clients?: { admin: TurnkeyCalls; signer: TurnkeyCalls };
 }
@@ -210,14 +196,101 @@ export class TurnkeyVault implements Vault {
       log(`Created the signer user (${this.signerUserId}) with no powers except its policies`);
     }
 
-    // NEXT PERSON: policies are matched by name only. Changing the cap or the chains leaves the old conditions in
-    // Turnkey; to change them, set up a fresh vault (new STATE_PATH folder) rather than editing these strings.
+    // NEXT PERSON: a failed rules update must not stop the vault from opening: the old policies stay in force (new ones
+    // are created before old ones are deleted), the page shows the problem, and withdrawals keep working.
+    try {
+      await this.syncContractInterfaces(log);
+      await this.syncPolicies(log);
+      this.policyProblem = undefined;
+    } catch (err) {
+      this.policyProblem = `Could not update the vault's policies: ${(err as Error).message.split("\n")[0].slice(0, 300)}`;
+      log(this.policyProblem);
+    }
+  }
+
+  /** Set when the last policy update failed; the vault then runs on the policies it already had. */
+  policyProblem?: string;
+
+  /** Upload the Aave contracts' interfaces once, so Turnkey can decode those calls for the policies. */
+  private async syncContractInterfaces(log: (line: string) => void) {
+    const wanted = contractInterfaces(this.cfg.aave ?? []);
+    if (!wanted.length) return;
+    const { smartContractInterfaces } = await this.admin.getSmartContractInterfaces(this.org);
+    const have = new Set(smartContractInterfaces.map((i) => i.smartContractAddress.toLowerCase()));
+    for (const w of wanted.filter((w) => !have.has(w.address.toLowerCase()))) {
+      await this.admin.createSmartContractInterface({
+        ...this.org,
+        label: w.label,
+        notes: "Uploaded by the Crossroads app so the vault signer's policies can read these calls.",
+        type: "SMART_CONTRACT_INTERFACE_TYPE_ETHEREUM",
+        smartContractAddress: w.address,
+        smartContractInterface: JSON.stringify(w.abi),
+      });
+      log(`Uploaded the contract interface for ${w.label}`);
+    }
+  }
+
+  /**
+   * Make the signer's policies exactly the ones signerPolicies() describes: create what is missing first, then delete
+   * the signer policies that no longer match (an older limit, older wording). Creating first means a failed create
+   * leaves the old rules in force rather than none.
+   */
+  private async syncPolicies(log: (line: string) => void) {
+    const desired = signerPolicies(this.signerUserId, this.walletId, this.cfg.limits, this.cfg.aave ?? []);
     const { policies } = await this.admin.getPolicies(this.org);
-    const have = new Set(policies.map((p) => p.policyName));
-    const missing = signerPolicies(this.signerUserId, this.walletId, this.cfg.cap, this.cfg.chainIds).filter((p) => !have.has(p.policyName));
+    const squash = (x: string) => x.replace(/\s+/g, "");
+    const same = (p: { policyName: string; effect: string; condition?: string; consensus?: string }, d: PolicySpec) =>
+      p.policyName === d.policyName && p.effect === d.effect && squash(p.condition ?? "") === squash(d.condition) && squash(p.consensus ?? "") === squash(d.consensus);
+    const signers = policies.filter((p) => p.policyName.startsWith(SIGNER_PREFIX) || (p.consensus ?? "").includes(this.signerUserId));
+    const missing = desired.filter((d) => !signers.some((p) => same(p, d)));
+    const stale = signers.filter((p) => !desired.some((d) => same(p, d)));
     if (missing.length) {
       await this.admin.createPolicies({ ...this.org, policies: missing });
       for (const p of missing) log(`Created policy: ${p.policyName}`);
+    }
+    for (const p of stale) {
+      await this.admin.deletePolicy({ ...this.org, policyId: p.policyId });
+      log(`Removed old policy: ${p.policyName}`);
+    }
+    this.policyNames.clear();
+  }
+
+  /** Policy names by ID, for naming the policy that decided a signature. Refreshed when an unknown ID shows up. */
+  private policyNames = new Map<string, string>();
+
+  private async policyName(id: string): Promise<string | undefined> {
+    if (!this.policyNames.has(id)) {
+      const { policies } = await this.admin.getPolicies(this.org);
+      for (const p of policies) this.policyNames.set(p.policyId, p.policyName);
+    }
+    return this.policyNames.get(id);
+  }
+
+  /**
+   * Turnkey's own record of which policies decided an activity, by name. The deciding one comes first: the explicit
+   * deny for a refusal, the allow for a signature.
+   */
+  async policyOutcomes(activityId: string): Promise<{ name: string; outcome: string }[]> {
+    const { policyEvaluations } = await this.admin.getPolicyEvaluations({ ...this.org, activityId });
+    const out: { name: string; outcome: string }[] = [];
+    for (const e of policyEvaluations ?? []) {
+      for (const p of e.policyEvaluations ?? []) {
+        if (!p.policyId || !p.outcome) continue;
+        out.push({ name: (await this.policyName(p.policyId)) ?? p.policyId, outcome: p.outcome });
+      }
+    }
+    const rank = (o: string) => (o === "OUTCOME_DENY_EXPLICIT" ? 0 : o === "OUTCOME_ALLOW" ? 1 : 2);
+    return out.sort((a, b) => rank(a.outcome) - rank(b.outcome));
+  }
+
+  /** The policy Turnkey says decided this activity, or undefined if it cannot say (display only). */
+  private async decidingPolicy(activityId: string | undefined, allowed: boolean): Promise<string | undefined> {
+    if (!activityId) return undefined;
+    try {
+      const want = allowed ? "OUTCOME_ALLOW" : "OUTCOME_DENY_EXPLICIT";
+      return (await this.policyOutcomes(activityId)).find((o) => o.outcome === want)?.name;
+    } catch {
+      return undefined;
     }
   }
 
@@ -260,7 +333,8 @@ export class TurnkeyVault implements Vault {
 
   async signTransaction(fromAddress: string, tx: TransactionSerializable, note?: VaultNote): Promise<Hex> {
     const unsigned = serializeTransaction(tx);
-    const [allowName, capName] = signerPolicies("", "", this.cfg.cap, this.cfg.chainIds).map((p) => p.policyName);
+    // What the rules say, in words. Turnkey decides; this only explains its decision on the page.
+    const expected = evaluate(tx, fromAddress, this.cfg.limits, this.cfg.aave ?? []);
     let signed: string;
     try {
       const res = await this.signer.signTransaction({
@@ -272,22 +346,19 @@ export class TurnkeyVault implements Vault {
       signed = res.signedTransaction;
       if (note) {
         note.activityId = activityIdOf(res);
-        note.policy = `Allowed by "${allowName}" (${formatEther(tx.value ?? 0n)} ETH, within the ${formatEther(this.cfg.cap)} ETH cap)`;
+        const by = (await this.decidingPolicy(note.activityId, true)) ?? expected.policy;
+        note.policy = by ? `Allowed by "${by}" (${expected.allowed ? expected.reason : "Turnkey's decision"})` : undefined;
+        note.call = expected.call;
       }
     } catch (err) {
-      // Turnkey answers every policy refusal the same way ("insufficient permissions"); say which limit the request broke.
+      // Turnkey answers every policy refusal the same way ("insufficient permissions"); name the rule that refused it.
       if (!/sufficient permissions/i.test((err as Error).message)) throw err;
-      const value = tx.value ?? 0n;
-      const why =
-        value > this.cfg.cap
-          ? `${formatEther(value)} ETH is above the ${formatEther(this.cfg.cap)} ETH per-withdrawal cap`
-          : tx.chainId !== undefined && !this.cfg.chainIds.includes(tx.chainId)
-            ? `chain ${tx.chainId} is not one the vault may sign for`
-            : "no policy allows this signature";
-      const overCap = value > this.cfg.cap;
-      throw new VaultError(`Policy refused: ${why}`, {
-        activityId: await this.lastRejectedSignature(),
-        policy: overCap ? `Denied by "${capName}"` : `No policy allows it ("${allowName}" does not match)`,
+      const activityId = await this.lastRejectedSignature();
+      const by = (await this.decidingPolicy(activityId, false)) ?? (expected.allowed ? undefined : expected.policy);
+      throw new VaultError(`Policy refused: ${expected.allowed ? "no policy allows this signature" : expected.reason}`, {
+        activityId,
+        policy: by ? `Denied by "${by}"` : `No policy allows it`,
+        call: expected.call,
       });
     }
     return (signed.startsWith("0x") ? signed : `0x${signed}`) as Hex;

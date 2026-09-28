@@ -18,7 +18,10 @@ export interface Status {
   vaultLabel: string;
   assets: Asset[];
   chains: ChainInfo[];
-  withdrawalCap: string;
+  /** Each network's per-withdrawal limit (wei), enforced only by the vault's policy. */
+  withdrawalCaps: Record<Asset, string>;
+  /** Set when the vault's last policy update failed; the vault runs on the policies it already had. */
+  policyProblem: string | null;
   liquidityProvider: string | null;
   pool: Record<Asset, string>;
   accounts: number;

@@ -39,7 +39,7 @@ let dir: string;
 let app: App;
 
 function build(opts: { liquidityProvider?: string } = {}) {
-  app = new App(new LocalVault(MNEMONIC, [], CAP), join(dir, "state.json"), opts);
+  app = new App(new LocalVault(MNEMONIC, [], { limits: [{ chainId: 11155111, name: "Sepolia", cap: CAP }, { chainId: 84532, name: "Base Sepolia", cap: parseEther("0.02") }] }), join(dir, "state.json"), opts);
   return app;
 }
 

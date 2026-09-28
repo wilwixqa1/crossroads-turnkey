@@ -8,14 +8,14 @@
  */
 import { dirname, join } from "node:path";
 import { parseEther, type TransactionSerializable } from "viem";
-import { WITHDRAWAL_CAP } from "../app.js";
-import { CHAINS } from "../chains/config.js";
+import { withdrawalLimits } from "../chains/config.js";
+import { AAVE_MARKETS } from "../chains/aave.js";
 import { TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, turnkeyClient } from "../signer/turnkey.js";
 
 const dir = dirname(process.env.STATE_PATH ?? join(process.cwd(), "data", "state.json"));
 const organizationId = readVaultOrgId(dir);
 if (!organizationId) throw new Error("No vault yet: run the setup first");
-const vault = await TurnkeyVault.open({ organizationId, keys: loadOrCreateAppKeys(dir), cap: WITHDRAWAL_CAP, chainIds: CHAINS.map((c) => c.chain.id) });
+const vault = await TurnkeyVault.open({ organizationId, keys: loadOrCreateAppKeys(dir), limits: withdrawalLimits(), aave: AAVE_MARKETS });
 const from = (await vault.addresses())[0] ?? (await vault.newDepositAddress());
 
 const tx = (chainId: number, eth: string): TransactionSerializable => ({

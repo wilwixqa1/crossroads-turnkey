@@ -2,7 +2,7 @@
 
 > Snapshot of the living Scope of Work. The editable version is a Claude Doc (link in docs/sessions/T01_CONTEXT.md). Re-export here at each session close-out so the repo copy never drifts far.
 
-Sep 24, 2026 · @Will (Claude Doc rev 74)
+Sep 24, 2026 · @Will (Claude Doc rev 75)
 
 ## Purpose and success criteria
 
@@ -249,6 +249,8 @@ One page for trading, a narration panel beside it, and a separate proof page, de
 4. Turnkey saying no: the user types 0.06 ETH into the normal Withdraw form. The app has no limit of its own, so the request reaches Turnkey, which refuses it. The page shows the refusal, and the rejected signature sits in the Turnkey dashboard with the 0.05 ETH policy marked Denied. This is the single strongest moment in the demo, because the limit lives in Turnkey, not in the app.
 5. Two kinds of key, one provider: every trade shows "signed by your wallet," every withdrawal shows "signed by the vault," and the panel names which Turnkey key did each.
 6. A full audit trail: every Turnkey entry names the key that acted and shows its activity ID (click to copy; it matches the dashboard's Activities), withdrawals name the policy that allowed or denied them, on-chain actions link to the explorer, and a "What just happened" card walks through the latest action step by step (built Sept 24).
+
+**Earn through Aave (decided Sept 28, not built).** An Earn tab beside Swap, Send and Withdraw shows the live Aave v3 testnet rate and takes an amount; the balances table gains an Earning column. The vault supplies pooled funds from whichever vault address holds them, and the ledger tracks each user's share and splits interest by share. That is safe because the vault can never borrow, so the position cannot be liquidated. Turnkey enforces it: the vault uploads Aave's contract interface, and the signer's policies allow only supply and withdraw on Aave's pool on behalf of a vault address, approvals only to that pool, and an explicit deny on borrow. The "What just happened" card shows Turnkey decoding the call (function, amount, on behalf of whom) and naming the allowing policy. There is no borrow button on the trading screen: the Earn tab says Crossroads can never borrow against your funds and links to the proof page, whose live check asks the vault to borrow and shows Turnkey's refusal. On-chain Uniswap swaps stay a talking point; the ledger's instant swap covers trading.
 
 **Keeping it simple:** no passwords or extensions (Google is the login), one asset pair, everything on one screen, two demo personas as two Google accounts, deposits made before the call so nothing waits on camera, and no charts or settings. MetaMask appears only as the outside wallet funds come from and go to.
 

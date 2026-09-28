@@ -1,6 +1,6 @@
 # T03 context (Sept 24, 2026)
 
-Session 3 took Crossroads from a laptop app to a live app on Oasis ROFL testnet, signed in with Google, with a real Turnkey vault the app created for itself. Will's call with Bryce (Turnkey CEO) is next week. Session 4 starts from "What is next".
+Session 3 took Crossroads from a laptop app to a live app on Oasis ROFL testnet, signed in with Google, with a real Turnkey vault the app created for itself. Will's call with Bryce (Turnkey CEO) is about Sept 30 ("in two days" on Sept 28). Session 4 starts from "What is next".
 
 ## How session 4 starts
 Will pastes this file and says "let's begin session 4". Claude then:
@@ -17,9 +17,9 @@ Will pastes this file and says "let's begin session 4". Claude then:
 
 ## Where things live
 - Design: Claude Doc SoW https://claude.ai/code/artifact/6e5f1007-0475-40d2-96cd-7c38fbe43def, snapshot in docs/SOW.md.
-- Live app: https://p8080.m1742.opf-testnet-rofl-9.rofl.app
-  - ROFL app ID rofl1qrym7mrsn6kjxsj2rywtnn07scpkev73vsd43zwm, machine m1742 on the Oasis-run provider (oasis1qp2ens0hsp7gh23wajxa4hpetkdek3swyyulyrmz), 5 TEST per hour.
-  - Paid until Sept 26 20:41 UTC (Saturday 4:41 PM Eastern). Top up before then or the next deploy rents a new machine: new address, empty ledger, Google origin to re-add.
+- Live app: none right now. Machine m1742 (https://p8080.m1742.opf-testnet-rofl-9.rofl.app) lapsed on Sept 26 and was removed.
+  - ROFL app ID rofl1qrym7mrsn6kjxsj2rywtnn07scpkev73vsd43zwm; the registration and its 100 TEST deposit survive. Oasis-run provider oasis1qp2ens0hsp7gh23wajxa4hpetkdek3swyyulyrmz, 5 TEST per hour.
+  - The next deploy rents a new machine with a new address (Will adds it to the Google client's Authorized JavaScript origins) and an empty ledger. The enclave keys and the vault survive: the app finds its vault by its admin key.
 - Deploy wallet (ROFL app admin): 0xd3bac6427A4702aCb3d6Ae3107402BE223c924C3 (oasis1qzqa7nucgaag7p9duqqprt3frwc0c8ghfvne9tu7), about 20 TEST left. Its key exists only as the repo secret DEPLOY_WALLET_KEY. Will funds it from MetaMask on Sapphire Testnet.
 - Deploying: GitHub Actions, workflow "deploy", started by hand (Actions tab) or by the API with Will's token. Modes: deploy (build, register if needed, publish, run; commits the manifest and pinned image back to main), top-up (add hours), status. Each deploy to the same machine keeps the address and the saved ledger.
 - Turnkey, Will's main org fa26e2cd-7656-4db6-b26f-3012c3b578e8:
@@ -29,7 +29,7 @@ Will pastes this file and says "let's begin session 4". Claude then:
   - app-admin (only root, key 03b9de…) and app-signer (02bdbd…), both keys from ROFL's key service.
   - Two policies: withdrawals on Sepolia and Base Sepolia; deny above 0.05 ETH.
   - Address #0 = William Wendt's deposit address 0x0BeAc0e5b61A8DB1d211BB638f21dFf5AF2bCEA1, holding 0.1 Sepolia ETH.
-- Users: William Wendt (sub-org c6ae2957…, account 0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec, 0.1 Sepolia ETH available); wil wix (sub-org 04f9058c…, account 0xbac4de4f…, not yet in the fresh ledger).
+- Users: William Wendt (sub-org c6ae2957…, account 0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec; his 0.1 Sepolia ETH sits unassigned at vault address #0 until the restore step); wil wix (sub-org 04f9058c…, account 0xbac4de4f8241e6340d75affc454953ab50fa203b; had vault address #1, 0x0D7Bb399D1FF2138Bc023934b8F462d823CcF0dC, empty).
 - Throwaway sub-orgs, nothing can sign for them: T02 vault b27be120; local-test vault db7ddd37; browser-signing checks 15cda38f and c650228a; sealed test vault aa1cb620.
 - Google client: SimpleBlueprints' client; the ROFL address is in its Authorized JavaScript origins.
 
@@ -70,19 +70,41 @@ Will pastes this file and says "let's begin session 4". Claude then:
   - Per-user addresses do not make it better. A shared address would not hide whose deposit is whose either, since the paper's deposit tag names the account.
 - The Aave-through-the-vault idea is our extension, not the paper's. The paper puts lending on its backend chain. Kept as a talking point.
 
+## After close-out (Sept 24-28)
+- The machine lapsed on Sept 26 (paid time ran out) and the provider removed it. Nothing on-chain was lost; the ledger and the web address were.
+- Will's live testing surfaced page problems, all now on the work list:
+  - an expired 8-hour sign-in showed a raw "Turnkey error 16: expired api key" (the tab kept using the old session key);
+  - Send took a MetaMask address, a Turnkey UUID, and a deposit address before the right account ID: the wallet signs before the recipient is checked, so three failed sends cost three signatures;
+  - activity labels showed only the first 8 characters, which are a timestamp, so two activities looked identical.
+- Signature budget: about 8 of the free 25 used. The full run, rehearsal and call need roughly 5 to 7 each, so Will should add the pay-as-you-go card on Turnkey before the rehearsal.
+- Decided: an Aave "can supply, can never borrow" policy with a refused-borrow live check, one real Aave supply, and the DeFi UI plan (Earn tab; pooled supply with per-user shares; the card shows Turnkey decoding the call). See docs/BACKLOG.md and the SoW's "Earn through Aave". On-chain Uniswap swaps stay a talking point.
+- Open, Will to decide: send-by-email (Send accepting an email; lookup reveals only the recipient's display name, and only during a real send).
+- Talking points prepared in chat:
+  - Turnkey policies vs the ledger's canSign: a flat cap is a demo device; production would use a spending limit over time;
+  - Aave through the vault is our extension, not the paper's;
+  - πCreds (Cornell Tech, arXiv 2606.03771) and TVC: TVC's reproducible builds fix the paper's admitted Google-build dependency, but TVC runs on AWS Nitro without GPUs, so confidential LLM inference is the open piece.
+- Will's March interview prep (Enterprise AE role, including a CEO prep doc for Bryce) is in the chat "Turnkey Enterprise Account Executive interview prep" (https://claude.ai/chat/01d2d879-b2e6-4b2f-9145-549a3d5d75ab). No prep file exists yet for this round.
+
 ## What is next (T04)
-See docs/BACKLOG.md "Next up":
-1. Will finishes the live run: wil wix signs in, send 0.01, withdraw 0.01. The first successful vault-signed withdrawal on a real network.
-2. Per-network limits.
-3. The proof page with live checks.
-4. The Base Sepolia run and pool seeding.
-5. A recorded rehearsal, then machine top-ups through the call.
+The call is about two days out, so build and test on local chains first and deploy once, a day before the call. See docs/BACKLOG.md "Next up":
+1. Build locally:
+   - per-network limits;
+   - the proof page with live checks (export, wrong network, borrow, sign-up key, replay);
+   - the Aave policy and the Earn tab;
+   - expired-session handling;
+   - the recipient check before signing;
+   - dashboard-style activity IDs;
+   - Send accepting a deposit address;
+   - the restore step for William Wendt's 0.1.
+2. Deploy once and add the new address to the Google client. Restore the 0.1, then run the full path live: two sign-ins, send, a successful withdrawal, the over-limit refusal, one Aave supply, the Base Sepolia run and pool seeding.
+3. A recorded rehearsal on that same machine, then top-ups through the call.
 
 ## Waiting on Will
-- TEST top-ups: about 120 per day of uptime through the call.
+- About 200 TEST in the deploy wallet before the deploy (it holds about 20; 5 TEST per hour, about 30 to 36 hours to cover).
 - About 0.1 Base Sepolia ETH.
-- The live run steps above.
-- Optional: an Alchemy key; the billing check on Turnkey's usage page (about 5 completed signatures expected).
+- The pay-as-you-go card on Turnkey before the rehearsal.
+- Adding the new machine's address to the Google client after the deploy.
+- Optional: an Alchemy key; a decision on send-by-email; a fresh prep file for the Bryce round.
 
 ## Code comments
 Written during the session, in new or changed code (all start NEXT PERSON):

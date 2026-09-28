@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { english, generateMnemonic } from "viem/accounts";
-import { App, type RequestTrace, type RestoreEntry } from "./app.js";
+import { App, notPlainMessage, type RequestTrace, type RestoreEntry } from "./app.js";
 import { LocalVault, PendingVault, type Vault } from "./signer/index.js";
 import { TurnkeyVault, findOrCreateVault, readVaultOrgId } from "./signer/turnkey.js";
 import { loadAppKeys, roflAppId } from "./signer/keys.js";
@@ -14,6 +14,7 @@ import { CHAINS, chainFor, withdrawalLimits } from "./chains/config.js";
 import { AAVE_MARKETS } from "./chains/aave.js";
 import { loadState } from "./storage/state.js";
 import { UserDirectory, SESSION_SECONDS } from "./auth/google.js";
+import { CHECKS, codeVersion, explorerFor, runCheck, type CheckId } from "./proof.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = process.env.STATE_PATH ?? join(process.cwd(), "data", "state.json");
@@ -195,6 +196,15 @@ server.get<{ Params: { q: string } }>("/api/recipients/:q", async (req, reply) =
   return { account: acct.id, name: acct.name, via: acct.id === req.params.q.trim().toLowerCase() ? "account" : "deposit address" };
 });
 
+/** Check a withdrawal address before the user's wallet signs: withdrawals reach plain wallets only. */
+server.get<{ Params: { address: string }; Querystring: { asset: Asset } }>("/api/destinations/:address", async (req) => {
+  const chain = app.chains.get(req.query.asset);
+  if (!chain) throw new LedgerError("Unknown asset", "BAD_ASSET");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(req.params.address)) throw new LedgerError("Not an address", "BAD_ADDRESS");
+  const plain = await chain.isPlainWallet(req.params.address);
+  return { plain, message: plain ? null : notPlainMessage(chain.cfg.chain.name) };
+});
+
 /** The exact text a client must sign for a request; keeps client and server in step. */
 server.post<{ Body: Omit<SignedRequest, "signature"> }>("/api/requests/message", async (req) => {
   const { account, seq, action, params } = req.body;
@@ -219,11 +229,45 @@ server.get<{ Querystring: { account?: string } }>("/api/hood", async (req) => {
   return app.hood.filter((h) => !acct || !h.account || h.account === acct).slice(-100).reverse();
 });
 
-server.get("/api/proof", async () => ({
-  vault: app.vault.describe(),
-  solvency: await app.solvency(),
-  withdrawals: Object.values(app.ledger.state.withdrawals).slice(-20).reverse(),
-}));
+/** The proof page is the same page script; it draws the proof view at this address. */
+server.get("/proof", (_req, reply) => reply.sendFile("index.html"));
+
+/** Everything the proof page shows, read live. Each part fails on its own, so one slow source never blanks the page. */
+server.get("/api/proof", async () => {
+  const part = async <T>(f: () => Promise<T>): Promise<T | { error: string }> => {
+    try {
+      return await f();
+    } catch (err) {
+      return { error: (err as Error).message.split("\n")[0].slice(0, 200) };
+    }
+  };
+  const tk = app.vault instanceof TurnkeyVault ? app.vault : undefined;
+  const [code, vault, signup, solvency, history] = await Promise.all([
+    part(() => codeVersion(ROFL_APP_ID)),
+    part(async () => (tk ? tk.keyControl() : null)),
+    part(async () => (directory ? directory.signupControl() : null)),
+    part(() => app.solvency()),
+    part(async () => (tk ? (await tk.signingHistory()).map((h) => ({ ...h, link: explorerFor(h.chainId, h.txHash) })) : null)),
+  ]);
+  return {
+    vaultLabel: app.vault.label,
+    vaultDescription: app.vault.describe(),
+    appKeys: keys ? { source: keys.source, vaultAdmin: keys.admin.publicKey, vaultSigner: keys.signer.publicKey, signup: keys.signup.publicKey } : null,
+    code,
+    vault,
+    signup,
+    solvency,
+    history,
+    policyProblem: tk?.policyProblem ?? null,
+    checks: CHECKS,
+  };
+});
+
+server.post<{ Params: { id: string } }>("/api/proof/checks/:id", async (req) => {
+  const id = req.params.id as CheckId;
+  if (!CHECKS.some((c) => c.id === id)) throw new LedgerError("Unknown check", "BAD_CHECK");
+  return runCheck(id, app, directory);
+});
 
 server.listen({ port: PORT, host: "0.0.0.0" }).then(() => {
   app.start();

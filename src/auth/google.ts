@@ -19,7 +19,7 @@ export const USER_WALLET_NAME = "Crossroads wallet";
 /** How long a sign-in lasts before the page asks for Google again. Long enough for a rehearsal plus the call. */
 export const SESSION_SECONDS = Number(process.env.SESSION_SECONDS ?? 8 * 60 * 60);
 
-export type SignupCalls = Pick<TurnkeyApiClient, "getSubOrgIds" | "createSubOrganization" | "oauthLogin" | "getWallets" | "getWalletAccounts">;
+export type SignupCalls = Pick<TurnkeyApiClient, "getSubOrgIds" | "createSubOrganization" | "oauthLogin" | "getWallets" | "getWalletAccounts" | "createPolicies" | "getActivities" | "getUsers" | "getPolicies">;
 
 export interface GoogleSignIn {
   /** The user's own Turnkey sub-organization. */
@@ -114,6 +114,43 @@ export class UserDirectory {
     if (!session) throw new Error("Turnkey did not open a session");
 
     return { organizationId, address: address.toLowerCase(), name, session, expiresAt: Date.now() + SESSION_SECONDS * 1000, created, ms, activities };
+  }
+
+  // ---------- proof page ----------
+
+  /** The sign-up user and its policies in Will's organization, as Turnkey reports them. */
+  async signupControl() {
+    const [{ users }, { policies }] = await Promise.all([this.client.getUsers({ organizationId: this.parentOrgId }), this.client.getPolicies({ organizationId: this.parentOrgId })]);
+    const user = users.find((u) => u.userName === SIGNUP_USER_NAME);
+    return {
+      organizationId: this.parentOrgId,
+      user: user ? { name: user.userName, id: user.userId, root: false } : null,
+      policies: user ? policies.filter((p) => (p.consensus ?? "").includes(user.userId)).map((p) => ({ name: p.policyName, effect: p.effect, condition: p.condition ?? "", notes: p.notes ?? "" })) : [],
+    };
+  }
+
+  /**
+   * The sign-up key tries to add a policy to Will's organization. Turnkey must refuse; the refusal shows in Will's own
+   * Activities. The policy is harmless even if it were ever created (it denies, and matches nothing).
+   */
+  async tryAddPolicy(): Promise<{ refused: boolean; message: string; activityId?: string; policy?: string }> {
+    try {
+      await this.client.createPolicies({
+        organizationId: this.parentOrgId,
+        policies: [{ policyName: "Crossroads proof check: must never exist", effect: "EFFECT_DENY", consensus: "approvers.any(user, user.id == 'nobody')", condition: "false", notes: "Created only if the sign-up key's limits failed." }],
+      });
+      return { refused: false, message: "Turnkey accepted a policy from the sign-up key. This should never happen." };
+    } catch (err) {
+      if (!/sufficient permissions/i.test((err as Error).message)) throw err;
+      let activityId: string | undefined;
+      try {
+        const { activities } = await this.client.getActivities({ organizationId: this.parentOrgId, filterByType: ["ACTIVITY_TYPE_CREATE_POLICIES"], filterByStatus: ["ACTIVITY_STATUS_REJECTED"], paginationOptions: { limit: "1" } });
+        activityId = activities[0]?.id;
+      } catch {
+        /* display only */
+      }
+      return { refused: true, message: (err as Error).message.split("\n")[0].slice(0, 200), activityId, policy: "No policy allows it" };
+    }
   }
 
   /** The user's wallet address, read with the parent's read-only access to the sub-organization. */

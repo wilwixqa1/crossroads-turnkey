@@ -8,6 +8,7 @@ import { api, ApiError, type AccountView, type Asset, type FeedEvent, type HoodE
 import { standIn, type RequestSigner, type StandInAccount } from "./signer.js";
 import { googleSession, renderGoogleButton, SessionExpired, turnkeySigner } from "./google.js";
 import { fmtClock, fmtEth, fmtMs, isAddress, parseEthInput, shortAddr, shortId, spotRate } from "./format.js";
+import { renderProof, runProofCheck } from "./proof.js";
 
 const ASSET_NAMES: Record<Asset, string> = { ETH_SEPOLIA: "Sepolia ETH", ETH_BASE_SEPOLIA: "Base ETH" };
 const BLOCK_SECONDS: Record<Asset, number> = { ETH_SEPOLIA: 12, ETH_BASE_SEPOLIA: 2 };
@@ -218,6 +219,7 @@ function renderShell() {
       <div class="brand">Crossroads on Turnkey</div>
       <ul class="nets" aria-label="Networks">${s.chains.map((c) => `<li>${esc(c.name)}</li>`).join("")}</ul>
       <div class="who">
+        <a href="/proof" target="_blank" rel="noopener">Proof</a>
         <span class="name">${esc(me.acct.name)}</span>
         <button type="button" class="link" data-copy="${me.signer.address}" title="${me.signer.address}">Copy account ID</button>
         ${googleMode() ? `<button type="button" class="link" id="signout">Sign out</button>` : `<button type="button" class="link" id="switch">Switch account</button>`}
@@ -632,6 +634,13 @@ async function onSubmit(form: HTMLFormElement) {
     const asset = field("asset") as Asset;
     const destination = field("destination");
     if (!isAddress(destination)) return say(out, "Enter the address to withdraw to: 0x followed by 40 characters.", "err");
+    // Check the address before the wallet signs: a withdrawal cannot reach a contract or smart account.
+    try {
+      const d = await api.destination(destination, asset);
+      if (!d.plain) return say(out, d.message ?? "That address cannot receive a plain transfer.", "err");
+    } catch (err) {
+      return say(out, `Could not check that address: ${(err as Error).message}`, "err");
+    }
     try {
       localStorage.setItem("crossroads.lastDestination", destination);
     } catch {
@@ -723,6 +732,10 @@ root.addEventListener("click", async (ev) => {
     setTimeout(() => (t.textContent = was), 1500);
     return;
   }
+  if (t.dataset.check) {
+    void runProofCheck(root, t.dataset.check, t as HTMLButtonElement);
+    return;
+  }
   if (t.dataset.tab) {
     state.tab = t.dataset.tab as Tab;
     renderPanel();
@@ -781,6 +794,7 @@ async function boot() {
   } catch {
     /* default theme */
   }
+  if (location.pathname === "/proof") return renderProof(root);
   try {
     state.status = await api.status();
   } catch {

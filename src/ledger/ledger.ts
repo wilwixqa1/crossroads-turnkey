@@ -309,14 +309,18 @@ export class Ledger {
     this.emit({ kind: "withdraw_complete", account: w.account, settlement: "onchain", detail: { withdrawalId: id, feeActual: feeActual.toString() } });
   }
 
-  /** Withdrawal could not be sent (or the signer refused). Unlock everything. */
-  failWithdrawal(id: string, error: string) {
+  /**
+   * Withdrawal could not be sent (or the signer refused, or it reverted). Unlock everything, less any network fee a
+   * reverted transaction really paid.
+   */
+  failWithdrawal(id: string, error: string, feePaid = 0n) {
     const w = this.getWithdrawal(id);
     if (w.status === "complete") throw new LedgerError("Already complete", "BAD_STATE");
     const acct = this.getAccount(w.account);
     const reserved = w.amount + w.feeReserved;
     acct.balances[w.asset].pending -= reserved;
-    acct.balances[w.asset].available += reserved;
+    acct.balances[w.asset].available += reserved - feePaid;
+    if (feePaid > 0n) w.feeActual = feePaid;
     w.status = "failed";
     w.error = error;
     w.updatedAt = Date.now();

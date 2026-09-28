@@ -12,8 +12,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
-import { getPublicKey } from "@turnkey/crypto";
-import { bytesToHex, getAddress, serializeTransaction, type Hex, type TransactionSerializable } from "viem";
+import { generateP256KeyPair, getPublicKey } from "@turnkey/crypto";
+import { bytesToHex, getAddress, keccak256, parseTransaction, serializeTransaction, type Hex, type TransactionSerializable } from "viem";
 import { VaultError, type Vault, type VaultNote } from "./index.js";
 import { SIGNER_PREFIX, contractInterfaces, evaluate, signerPolicies, type ChainLimit, type PolicySpec } from "./policy.js";
 import type { AaveMarket } from "../chains/aave.js";
@@ -131,6 +131,8 @@ export type TurnkeyCalls = Pick<
   | "signTransaction"
   | "getActivities"
   | "getPolicyEvaluations"
+  | "getOrganizationConfigs"
+  | "exportWallet"
 >;
 
 export interface TurnkeyVaultConfig {
@@ -295,12 +297,92 @@ export class TurnkeyVault implements Vault {
   }
 
   /** The newest refused signature in the vault, so the page can name the exact activity Turnkey rejected. */
-  private async lastRejectedSignature(): Promise<string | undefined> {
+  private lastRejectedSignature(): Promise<string | undefined> {
+    return this.lastRejected("ACTIVITY_TYPE_SIGN_TRANSACTION_V2");
+  }
+
+  // NEXT PERSON: this is "the newest rejected activity of this type", not a lookup by request. Two refusals at the same
+  // moment could swap IDs on the page (display only).
+  private async lastRejected(type: "ACTIVITY_TYPE_SIGN_TRANSACTION_V2" | "ACTIVITY_TYPE_EXPORT_WALLET"): Promise<string | undefined> {
     try {
-      const { activities } = await this.admin.getActivities({ ...this.org, filterByType: ["ACTIVITY_TYPE_SIGN_TRANSACTION_V2"], filterByStatus: ["ACTIVITY_STATUS_REJECTED"], paginationOptions: { limit: "1" } });
+      const { activities } = await this.admin.getActivities({ ...this.org, filterByType: [type], filterByStatus: ["ACTIVITY_STATUS_REJECTED"], paginationOptions: { limit: "1" } });
       return activities[0]?.id;
     } catch {
       return undefined; // display only
+    }
+  }
+
+  // ---------- proof page (read-only, plus refusals by the signer; never anything with the admin key) ----------
+
+  /** Who can act in the vault, read live from Turnkey: its users, its root quorum, the signer's policies. */
+  async keyControl() {
+    const [{ users }, { policies }, { configs }, { smartContractInterfaces }] = await Promise.all([
+      this.admin.getUsers(this.org),
+      this.admin.getPolicies(this.org),
+      this.admin.getOrganizationConfigs(this.org),
+      this.admin.getSmartContractInterfaces(this.org),
+    ]);
+    const quorum = configs.quorum;
+    const keyOf = (pk: string) => (pk === this.cfg.keys.admin.publicKey ? "the app's admin key" : pk === this.cfg.keys.signer.publicKey ? "the app's signer key" : "a key this app does not know");
+    return {
+      organizationId: this.cfg.organizationId,
+      users: users.map((u) => ({
+        name: u.userName,
+        id: u.userId,
+        root: quorum?.userIds.includes(u.userId) ?? false,
+        credentials: [
+          ...u.apiKeys.map((k) => `API key ${k.credential.publicKey.slice(0, 10)}… (${keyOf(k.credential.publicKey)})`),
+          ...u.authenticators.map(() => "passkey"),
+          ...u.oauthProviders.map((o) => `${o.providerName} sign-in`),
+        ],
+        email: !!u.userEmail,
+        phone: !!u.userPhoneNumber,
+      })),
+      rootQuorum: { threshold: quorum?.threshold ?? 0, members: (quorum?.userIds ?? []).map((id) => users.find((u) => u.userId === id)?.userName ?? id) },
+      policies: policies.map((p) => ({ name: p.policyName, effect: p.effect, condition: p.condition ?? "", notes: p.notes ?? "" })),
+      contractInterfaces: smartContractInterfaces.map((i) => ({ label: i.label, address: i.smartContractAddress })),
+    };
+  }
+
+  /** The vault's recent signing activity, with the on-chain transaction each signature became. */
+  async signingHistory(limit = 12) {
+    const { activities } = await this.admin.getActivities({ ...this.org, filterByType: ["ACTIVITY_TYPE_SIGN_TRANSACTION_V2"], paginationOptions: { limit: String(limit) } });
+    return activities.map((a) => {
+      const unsigned = a.intent?.signTransactionIntentV2?.unsignedTransaction;
+      const signed = a.result?.signTransactionResult?.signedTransaction;
+      let chainId: number | undefined;
+      let to: string | undefined;
+      let value: string | undefined;
+      try {
+        const tx = parseTransaction(`0x${(unsigned ?? "").replace(/^0x/, "")}` as Hex);
+        chainId = tx.chainId;
+        to = tx.to ?? undefined;
+        value = (tx.value ?? 0n).toString();
+      } catch {
+        /* not an Ethereum transaction we can read */
+      }
+      return {
+        id: a.id,
+        status: a.status,
+        at: Number(a.createdAt?.seconds ?? 0) * 1000,
+        chainId,
+        to,
+        value,
+        txHash: signed ? keccak256(`0x${signed.replace(/^0x/, "")}` as Hex) : undefined,
+      };
+    });
+  }
+
+  /** The signer asks Turnkey to export the vault wallet, to a key that is thrown away at once. Turnkey must refuse. */
+  async tryExport(): Promise<{ refused: boolean; message: string; activityId?: string; policy?: string }> {
+    const target = generateP256KeyPair().publicKeyUncompressed; // its private half is never kept
+    try {
+      await this.signer.exportWallet({ ...this.org, walletId: this.walletId, targetPublicKey: target });
+      return { refused: false, message: "Turnkey exported the wallet, encrypted to a key nobody kept. This should never happen." };
+    } catch (err) {
+      if (!/sufficient permissions/i.test((err as Error).message)) throw err; // not a refusal: the check did not run
+      const activityId = await this.lastRejected("ACTIVITY_TYPE_EXPORT_WALLET");
+      return { refused: true, message: (err as Error).message.split("\n")[0].slice(0, 200), activityId, policy: "No policy allows it" };
     }
   }
 

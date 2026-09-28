@@ -189,6 +189,15 @@ export class EvmChain {
     }
   }
 
+  /**
+   * True if the address has no code: a plain wallet. Withdrawals are 21,000-gas transfers (the vault's policy allows
+   * nothing else), which revert at a contract or a smart account, including an EOA upgraded with EIP-7702.
+   */
+  async isPlainWallet(address: string): Promise<boolean> {
+    const code = await this.primary.getCode({ address: address as Hex });
+    return !code || code === "0x";
+  }
+
   async balanceOf(address: string): Promise<bigint> {
     return this.primary.getBalance({ address: address as Hex });
   }

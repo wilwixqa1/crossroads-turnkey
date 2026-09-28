@@ -31,6 +31,7 @@ function fakeClient(over: Fake = {}): Fake {
     sendRawTransaction: async () => "0x",
     getTransactionReceipt: async () => notFound(),
     getBlock: async () => ({ transactions: [] }),
+    getCode: async () => "0x",
     ...over,
   };
 }
@@ -256,5 +257,32 @@ describe("restoring accounts after a move to a new machine", () => {
     await app.signUp(first.id, "William");
     await app.retryClaims();
     expect(app.claims).toHaveLength(1);
+  });
+});
+
+describe("withdrawal destinations", () => {
+  it("refuses a smart account or contract before locking anything, since a plain transfer cannot reach it", async () => {
+    build();
+    useClients("ETH_SEPOLIA", fakeClient({ getCode: async () => "0xef0100ff0bdcd00357eacf612ddc449aa590b90215a013" }));
+    const alice = await user("Alice");
+    app.ledger.creditDeposit("ETH_SEPOLIA", "0xd1", alice.depositAddress, parseEther("0.1"));
+    await expect(alice.send("withdraw", { asset: "ETH_SEPOLIA", amount: parseEther("0.01").toString(), destination: OUTSIDE })).rejects.toThrow(/smart contract or smart account/);
+    expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA).toEqual({ available: parseEther("0.1"), pending: 0n });
+  });
+
+  it("charges the network fee a reverted withdrawal really paid, and returns the rest", async () => {
+    build();
+    let sent = false;
+    const primary = fakeClient({
+      sendRawTransaction: async () => ((sent = true), "0x"),
+      getTransactionReceipt: async () => (sent ? { status: "reverted", blockNumber: 900n, gasUsed: 21_000n, effectiveGasPrice: 2n } : notFound()),
+    });
+    useClients("ETH_SEPOLIA", primary);
+    const alice = await user("Alice");
+    app.ledger.creditDeposit("ETH_SEPOLIA", "0xd1", alice.depositAddress, parseEther("0.1"));
+    await alice.send("withdraw", { asset: "ETH_SEPOLIA", amount: parseEther("0.01").toString(), destination: OUTSIDE });
+    await app.processWithdrawals();
+    await app.processWithdrawals();
+    expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA).toEqual({ available: parseEther("0.1") - 42_000n, pending: 0n });
   });
 });

@@ -66,6 +66,11 @@ export interface RequestTrace {
   signMs?: number;
 }
 
+/** Why a withdrawal to a contract or smart account is refused before anything is signed. */
+export function notPlainMessage(chainName: string): string {
+  return `That address is a smart contract or smart account on ${chainName}. Crossroads withdrawals are plain ETH transfers, which cannot reach it. Use a plain wallet address.`;
+}
+
 const ACTION_NAMES: Record<SignedRequest["action"], string> = {
   transfer: "Transfer",
   swap: "Swap",
@@ -84,6 +89,8 @@ export class App {
   incoming = new Map<string, Incoming>();
   /** How long a sent withdrawal with no receipt waits before the app checks whether it was dropped. */
   static DROP_GRACE_MS = 5 * 60_000;
+  /** The most recent request that used up its sequence number: the proof page's replay check sends it again. */
+  lastRequest?: SignedRequest;
   /** "Under the hood" log shown in the UI. */
   hood: HoodEntry[] = [];
   private timers: NodeJS.Timeout[] = [];
@@ -152,6 +159,7 @@ export class App {
     await verifyRequest(req);
     const acct = this.ledger.getAccount(req.account);
     this.ledger.consumeSeq(acct.id, req.seq);
+    this.lastRequest = req;
     const ref = `req:${acct.id}:${req.seq}`;
     if (trace?.activityId) {
       this.log({ source: "wallet", account: acct.id, key: "your wallet", activityId: trace.activityId, ms: trace.signMs, ref, text: `Your Turnkey wallet signed request #${req.seq} (${ACTION_NAMES[req.action].toLowerCase()}) through this browser's session. No pop-up, no gas.` });
@@ -194,6 +202,7 @@ export class App {
         // NEXT PERSON: no limit check here on purpose. The vault's policy is the only limit, so the demo's
         // over-limit refusal visibly comes from Turnkey. Do not add an app-side cap back.
         const chain = this.chains.get(asset)!;
+        if (!(await chain.isPlainWallet(p.destination))) throw new LedgerError(notPlainMessage(chain.cfg.chain.name), "NOT_PLAIN");
         const fee = await chain.estimateWithdrawalFee();
         const w = this.ledger.requestWithdrawal(acct.id, asset, amount, fee, p.destination);
         w.ref = ref;
@@ -386,8 +395,9 @@ export class App {
       this.ledger.completeWithdrawal(w.id, res.feeActual);
       this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} confirmed on-chain. Real fee ${EvmChain.fmt(res.feeActual)} ETH, unused reserve refunded.`, link: chain.cfg.explorerTx(w.txHash!) });
     } else {
-      this.ledger.failWithdrawal(w.id, "transaction reverted");
-      this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} reverted on-chain. Funds unlocked.` });
+      // A reverted transaction still paid its network fee, so the user bears it, as for a completed withdrawal.
+      this.ledger.failWithdrawal(w.id, "transaction reverted", res.feeActual);
+      this.log({ source: "chain", account: w.account, ref: w.ref, text: `Withdrawal #${w.id} reverted on-chain. Funds unlocked, less the ${EvmChain.fmt(res.feeActual)} ETH network fee it used.`, link: chain.cfg.explorerTx(w.txHash!) });
     }
     this.save();
   }

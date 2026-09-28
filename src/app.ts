@@ -24,9 +24,20 @@ import { loadState, saveState, type AppState } from "./storage/state.js";
  */
 export const WITHDRAWAL_CAP = parseEther(process.env.WITHDRAWAL_CAP_ETH ?? "0.05");
 
+/**
+ * An account whose ledger was lost with an old machine: on its next sign-in it gets its earlier deposit address back
+ * (the vault still holds it) and the listed deposits are credited again by their transactions (two providers, once).
+ */
+export interface RestoreEntry {
+  account: string;
+  depositAddress: string;
+  deposits?: { asset: Asset; txHash: string }[];
+}
+
 export interface AppOptions {
   /** Only this account may add liquidity. Unset means anyone may (laptop development). */
   liquidityProvider?: string;
+  restore?: RestoreEntry[];
 }
 
 /** A deposit seen at the chain tip that is not yet confirmed. Shown on the page; never credited from here. */
@@ -108,13 +119,38 @@ export class App {
 
   async signUp(id: string, name: string, ref?: string): Promise<Account> {
     const t0 = Date.now();
-    const note: VaultNote = {};
-    const depositAddress = await this.vault.newDepositAddress(note);
-    const turnkey = this.vault.label === "Turnkey";
-    this.log({ source: "turnkey", account: id.toLowerCase(), key: turnkey ? "vault admin" : undefined, activityId: note.activityId, ref, text: `${this.vault.label} created a deposit address for ${name} in the vault: ${depositAddress}. It works on every chain the app supports.`, ms: Date.now() - t0 });
-    const acct = this.ledger.createAccount(id, name, depositAddress);
+    const restore = this.opts.restore?.find((r) => r.account.toLowerCase() === id.toLowerCase());
+    const earlier = restore?.depositAddress.toLowerCase();
+    let acct: Account;
+    if (earlier && !this.ledger.findByDepositAddress(earlier) && (await this.vault.holds(earlier))) {
+      acct = this.ledger.createAccount(id, name, earlier);
+      this.log({ source: "ledger", account: acct.id, ref, text: `Crossroads gave ${name} back their earlier deposit address, ${earlier}. The vault kept it when the app moved to a new machine.` });
+      for (const d of restore!.deposits ?? []) this.claims.push({ ...d, account: acct.id });
+    } else {
+      const note: VaultNote = {};
+      const depositAddress = await this.vault.newDepositAddress(note);
+      const turnkey = this.vault.label === "Turnkey";
+      this.log({ source: "turnkey", account: id.toLowerCase(), key: turnkey ? "vault admin" : undefined, activityId: note.activityId, ref, text: `${this.vault.label} created a deposit address for ${name} in the vault: ${depositAddress}. It works on every chain the app supports.`, ms: Date.now() - t0 });
+      acct = this.ledger.createAccount(id, name, depositAddress);
+    }
     this.save();
+    if (this.claims.length) void this.retryClaims();
     return acct;
+  }
+
+  /** Deposits to credit again after a restore. Retried on every deposit poll until credited or found not to be one. */
+  claims: { asset: Asset; txHash: string; account: string }[] = [];
+
+  async retryClaims() {
+    for (const c of [...this.claims]) {
+      try {
+        const res = await this.claimDeposit(c.asset, c.txHash);
+        this.claims = this.claims.filter((x) => x !== c);
+        if (!res.credited) this.log({ source: "ledger", account: c.account, text: `Earlier deposit ${c.txHash} was not credited again: ${res.reason}.` });
+      } catch (err) {
+        console.warn(`restore claim ${c.txHash}: ${(err as Error).message}`); // network trouble: try again next poll
+      }
+    }
   }
 
   // ---------- signed requests ----------
@@ -183,6 +219,7 @@ export class App {
     if (this.busy.has(key)) return;
     this.busy.add(key);
     try {
+      if (this.claims.some((c) => c.asset === asset)) await this.retryClaims();
       const chain = this.chains.get(asset)!;
       const latest = await chain.latestHead();
       this.heads[asset] = latest;

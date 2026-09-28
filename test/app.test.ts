@@ -222,3 +222,39 @@ describe("deposits", () => {
     expect(await app.claimDeposit("ETH_SEPOLIA", elsewhere.hash)).toMatchObject({ credited: false });
   });
 });
+
+describe("restoring accounts after a move to a new machine", () => {
+  it("gives a returning user their earlier deposit address and credits their earlier deposit again, once", async () => {
+    build();
+    const first = await user("William");
+    const earlier = first.depositAddress;
+    const vault = app.vault;
+    // New machine: same vault, empty ledger.
+    const hash = "0x" + "30".repeat(32);
+    app = new App(vault, join(dir, "state-new.json"), { restore: [{ account: first.id, depositAddress: earlier, deposits: [{ asset: "ETH_SEPOLIA", txHash: hash }] }] });
+    const tx = { hash, to: earlier, from: OUTSIDE, value: parseEther("0.1") };
+    const client = fakeClient({ getBlockNumber: async () => 1010n, getTransaction: async () => tx, getTransactionReceipt: async () => ({ status: "success", blockNumber: 1000n }) });
+    useClients("ETH_SEPOLIA", client, client);
+    const acct = await app.signUp(first.id, "William");
+    expect(acct.depositAddress).toBe(earlier);
+    await app.retryClaims();
+    expect(app.ledger.getAccount(first.id).balances.ETH_SEPOLIA.available).toBe(parseEther("0.1"));
+    expect(app.claims).toHaveLength(0);
+    // Someone else signing up later gets a fresh address, never the restored one.
+    const other = await user("Other");
+    expect(other.depositAddress).not.toBe(earlier);
+  });
+
+  it("keeps a restore claim for later when the network is down, instead of dropping it", async () => {
+    build();
+    const first = await user("William");
+    const hash = "0x" + "31".repeat(32);
+    const vault = app.vault;
+    app = new App(vault, join(dir, "state-new.json"), { restore: [{ account: first.id, depositAddress: first.depositAddress, deposits: [{ asset: "ETH_SEPOLIA", txHash: hash }] }] });
+    const down = fakeClient({ getTransaction: async () => { throw new Error("timeout"); } });
+    useClients("ETH_SEPOLIA", down, down);
+    await app.signUp(first.id, "William");
+    await app.retryClaims();
+    expect(app.claims).toHaveLength(1);
+  });
+});

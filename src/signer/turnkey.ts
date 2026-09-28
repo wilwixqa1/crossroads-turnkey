@@ -237,6 +237,10 @@ export class TurnkeyVault implements Vault {
     return accounts.map((a) => a.address.toLowerCase());
   }
 
+  async holds(address: string): Promise<boolean> {
+    return (await this.addresses()).includes(address.toLowerCase());
+  }
+
   newDepositAddress(note?: VaultNote): Promise<string> {
     const next = this.queue.then(async () => {
       const { accounts } = await this.admin.getWalletAccounts({ ...this.org, walletId: this.walletId });

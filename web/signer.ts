@@ -16,6 +16,8 @@ export interface RequestSigner {
   signMessage(message: string): Promise<Hex>;
   /** Set after each signature when the signer is Turnkey: the activity and how long Turnkey took. */
   lastActivity?: { id: string; ms: number };
+  /** True once the sign-in behind this signer has run out. Stand-in keys never expire. */
+  expired?: () => boolean;
 }
 
 export interface StandInAccount {

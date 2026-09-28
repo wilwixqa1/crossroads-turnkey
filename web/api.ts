@@ -110,6 +110,7 @@ export const api = {
   googleSignIn: (oidcToken: string, publicKey: string) =>
     call<{ organizationId: string; address: string; name: string; session: string; expiresAt: number; created: boolean; ref: string }>("/api/auth/google", { method: "POST", body: JSON.stringify({ oidcToken, publicKey }) }),
   signUp: (id: string, name: string) => call<AccountView>("/api/accounts", { method: "POST", body: JSON.stringify({ id, name }) }),
+  recipient: (q: string) => call<{ account: string; name: string; via: "account" | "deposit address" }>(`/api/recipients/${encodeURIComponent(q.trim())}`),
   hood: (id: string) => call<HoodEntry[]>(`/api/hood?account=${encodeURIComponent(id)}`),
   quote: (assetIn: Asset, assetOut: Asset, amount: bigint) =>
     call<{ amountOut: string }>(`/api/quote?assetIn=${assetIn}&assetOut=${assetOut}&amount=${amount}`),

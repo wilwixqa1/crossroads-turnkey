@@ -116,3 +116,22 @@ describe("replay protection", () => {
     ).rejects.toThrow(/Bad signature/);
   });
 });
+
+describe("Send recipients", () => {
+  it("accepts an account ID or a Crossroads deposit address, and credits the owner either way", () => {
+    const l = setup();
+    l.creditDeposit("ETH_SEPOLIA", "0xTX9", VAULT_A, ETH);
+    expect(l.findRecipient(BOB)?.id).toBe(BOB);
+    expect(l.findRecipient(VAULT_B.toUpperCase().replace("0X", "0x"))?.id).toBe(BOB);
+    l.transfer(ALICE, VAULT_B, "ETH_SEPOLIA", ETH / 10n);
+    expect(l.getAccount(BOB).balances.ETH_SEPOLIA.available).toBe(ETH / 10n);
+  });
+
+  it("refuses an address that is not a Crossroads account, with the plain message the page shows", () => {
+    const l = setup();
+    l.creditDeposit("ETH_SEPOLIA", "0xTX9", VAULT_A, ETH);
+    expect(l.findRecipient("0x9999999999999999999999999999999999999999")).toBeUndefined();
+    expect(() => l.transfer(ALICE, "0x9999999999999999999999999999999999999999", "ETH_SEPOLIA", 1n)).toThrow(/isn't a Crossroads account/);
+    expect(() => l.transfer(ALICE, VAULT_A, "ETH_SEPOLIA", 1n)).toThrow(/your own account/);
+  });
+});

@@ -6,8 +6,8 @@
 import { requestMessage, type RequestAction } from "../src/ledger/requests.js";
 import { api, ApiError, type AccountView, type Asset, type FeedEvent, type HoodEntry, type Status } from "./api.js";
 import { standIn, type RequestSigner, type StandInAccount } from "./signer.js";
-import { googleSession, renderGoogleButton, turnkeySigner } from "./google.js";
-import { fmtClock, fmtEth, fmtMs, isAddress, parseEthInput, shortAddr, spotRate } from "./format.js";
+import { googleSession, renderGoogleButton, SessionExpired, turnkeySigner } from "./google.js";
+import { fmtClock, fmtEth, fmtMs, isAddress, parseEthInput, shortAddr, shortId, spotRate } from "./format.js";
 
 const ASSET_NAMES: Record<Asset, string> = { ETH_SEPOLIA: "Sepolia ETH", ETH_BASE_SEPOLIA: "Base ETH" };
 const BLOCK_SECONDS: Record<Asset, number> = { ETH_SEPOLIA: 12, ETH_BASE_SEPOLIA: 2 };
@@ -158,6 +158,13 @@ async function googleSignIn(oidcToken: string, publicKey: string) {
   } catch (err) {
     renderLogin((err as Error).message);
   }
+}
+
+/** The Google sign-in ran out: forget it and go back to Continue with Google with a plain message. */
+async function expireSession() {
+  state.me = null;
+  await googleSession.clear().catch(() => undefined);
+  renderLogin(new SessionExpired().message);
 }
 
 async function login(acct: StandInAccount) {
@@ -371,7 +378,7 @@ function stepMeta(h: HoodEntry, withClock: boolean): string {
     <p class="meta">
       ${withClock ? `<time>${fmtClock(h.at)}</time>` : ""}
       ${h.ms !== undefined ? `<span>${fmtMs(h.ms)}</span>` : ""}
-      ${h.activityId ? `<button type="button" class="link act" data-copy="${esc(h.activityId)}" title="Turnkey activity ${esc(h.activityId)}. Click to copy.">Activity ${esc(h.activityId.slice(0, 8))}</button>` : ""}
+      ${h.activityId ? `<button type="button" class="link act" data-copy="${esc(h.activityId)}" title="Turnkey activity ${esc(h.activityId)}. Click to copy.">Activity ${esc(shortId(h.activityId))}</button>` : ""}
       ${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">View on explorer</a>` : ""}
     </p>`;
 }
@@ -456,7 +463,8 @@ function renderPanel() {
       </form>`,
     send: `
       <form id="f-send" novalidate>
-        <label>To (their account ID) <input name="to" placeholder="0x…" autocomplete="off" spellcheck="false" class="mono"></label>
+        <label>To (their account ID or Crossroads deposit address) <input name="to" placeholder="0x…" autocomplete="off" spellcheck="false" class="mono"></label>
+        <p class="hint" data-hint="recipient"></p>
         ${others.length ? `<p class="picks">Accounts in this browser: ${others.map((o) => `<button type="button" class="chip" data-pick="${o.address}">${esc(o.name)}</button>`).join(" ")}</p>` : ""}
         <div class="fields">
           <label>Asset <select name="asset">${assetOptions("ETH_SEPOLIA")}</select></label>
@@ -561,6 +569,10 @@ async function submit(action: RequestAction, params: Record<string, string>, out
     say(out, done(res), "ok");
     return true;
   } catch (err) {
+    if (err instanceof SessionExpired) {
+      await expireSession();
+      return false;
+    }
     say(out, (err as Error).message, "err");
     return false;
   } finally {
@@ -603,11 +615,11 @@ async function onSubmit(form: HTMLFormElement) {
       scheduleQuote();
     }
   } else if (form.id === "f-send") {
-    const to = field("to").toLowerCase();
     const asset = field("asset") as Asset;
-    if (!isAddress(to)) return say(out, "Enter the recipient's account ID: 0x followed by 40 characters.", "err");
-    const name = standIn.list().find((a) => a.address === to)?.name ?? shortAddr(to);
-    if (await submit("transfer", { to, asset, amount: amount.toString() }, out, (res) => `Sent ${shown(asset)} to ${name}.${settled(res)}`)) clearAmount();
+    // Check the recipient before the wallet signs anything: a wrong address must not cost a Turnkey signature.
+    const who = await findRecipient(field("to"));
+    if ("error" in who) return say(out, who.error, "err");
+    if (await submit("transfer", { to: who.account, asset, amount: amount.toString() }, out, (res) => `Sent ${shown(asset)} to ${who.name}.${settled(res)}`)) clearAmount();
   } else if (form.id === "f-withdraw") {
     const asset = field("asset") as Asset;
     const destination = field("destination");
@@ -627,10 +639,42 @@ async function onSubmit(form: HTMLFormElement) {
   }
 }
 
+/** A Send recipient, checked with the app before anything is signed. */
+async function findRecipient(raw: string): Promise<{ account: string; name: string } | { error: string }> {
+  const q = raw.trim();
+  if (!isAddress(q)) return { error: "Enter their account ID or Crossroads deposit address: 0x followed by 40 characters." };
+  try {
+    const r = await api.recipient(q);
+    if (r.account === state.me?.signer.address) return { error: "That is your own account. To move funds to your own wallet, use Withdraw." };
+    return { account: r.account, name: r.name };
+  } catch (err) {
+    return { error: err instanceof ApiError && err.code === "NOT_AN_ACCOUNT" ? err.message : `Could not check that address: ${(err as Error).message}` };
+  }
+}
+
+let recipientTimer: number | undefined;
+/** Shows "Sending to <name>" under the To field as soon as a full address is typed. */
+function scheduleRecipient() {
+  window.clearTimeout(recipientTimer);
+  recipientTimer = window.setTimeout(async () => {
+    const input = $<HTMLInputElement>("#f-send input[name=to]");
+    const hint = $("#f-send [data-hint=recipient]");
+    if (!input || !hint) return;
+    const raw = input.value;
+    if (!raw.trim()) return void (hint.textContent = "");
+    if (!isAddress(raw)) return void (hint.textContent = "");
+    const who = await findRecipient(raw);
+    if (input.value !== raw) return; // the field changed while checking
+    hint.textContent = "error" in who ? who.error : `Sending to ${who.name}`;
+    hint.className = `hint ${"error" in who ? "err" : "ok"}`;
+  }, 250);
+}
+
 // ---------- data loop ----------
 
 async function refresh() {
   if (!state.me) return;
+  if (state.me.signer.expired?.()) return expireSession();
   const id = state.me.signer.address;
   try {
     const [view, hood] = await Promise.all([api.account(id), api.hood(id)]);
@@ -679,6 +723,7 @@ root.addEventListener("click", async (ev) => {
   if (t.dataset.pick) {
     const input = $<HTMLInputElement>("#f-send input[name=to]");
     if (input) input.value = t.dataset.pick;
+    scheduleRecipient();
     return;
   }
   if (t.dataset.login) {
@@ -711,6 +756,7 @@ root.addEventListener("submit", (ev) => {
 root.addEventListener("input", (ev) => {
   const el = ev.target as Element;
   if (el.closest("#f-swap")) scheduleQuote();
+  if (el.matches("#f-send input[name=to]")) scheduleRecipient();
   renderHints();
 });
 root.addEventListener("change", (ev) => {

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { english, generateMnemonic } from "viem/accounts";
-import { App, WITHDRAWAL_CAP, type RequestTrace } from "./app.js";
+import { App, WITHDRAWAL_CAP, type RequestTrace, type RestoreEntry } from "./app.js";
 import { LocalVault, PendingVault, type Vault } from "./signer/index.js";
 import { TurnkeyVault, findOrCreateVault, readVaultOrgId } from "./signer/turnkey.js";
 import { loadAppKeys, roflAppId } from "./signer/keys.js";
@@ -22,6 +22,8 @@ const LIQUIDITY_PROVIDER = process.env.LIQUIDITY_PROVIDER?.trim().toLowerCase() 
 /** google: Continue with Google, one Turnkey wallet per user. standin: a test key kept in the browser (laptop work). */
 const LOGIN_MODE = process.env.LOGIN_MODE ?? "standin";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID?.trim() || undefined;
+/** Accounts to give their earlier deposit addresses back after a move to a new machine (JSON list; see RestoreEntry). */
+const RESTORE = process.env.RESTORE_ACCOUNTS?.trim() ? (JSON.parse(process.env.RESTORE_ACCOUNTS) as RestoreEntry[]) : undefined;
 
 /**
  * The stand-in vault's key phrase: made once at random and kept beside the saved state. A fixed phrase
@@ -82,7 +84,7 @@ function buildDirectory(): UserDirectory | undefined {
 
 const signupKey = LOGIN_MODE === "google" ? keys!.signup : undefined;
 const directory = buildDirectory();
-const app = new App(await buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER });
+const app = new App(await buildVault(), STATE_PATH, { liquidityProvider: LIQUIDITY_PROVIDER, restore: RESTORE });
 if (app.vault instanceof PendingVault) {
   const pending = app.vault;
   const retry = setInterval(() => {
@@ -175,6 +177,19 @@ server.get<{ Params: { id: string } }>("/api/accounts/:id", async (req) => {
     .reverse()
     .map((w) => ({ ...w, link: w.txHash ? chainFor(w.asset).explorerTx(w.txHash) : undefined }));
   return { ...acct, events: app.ledger.eventsFor(acct.id).map(decorate), withdrawals, incoming: app.incomingFor(acct.id) };
+});
+
+/**
+ * Check a Send recipient before the user's wallet signs anything: an account ID or a Crossroads deposit address.
+ * Returns only the display name the page shows as "Sending to <name>".
+ */
+server.get<{ Params: { q: string } }>("/api/recipients/:q", async (req, reply) => {
+  const acct = app.ledger.findRecipient(req.params.q ?? "");
+  if (!acct) {
+    reply.status(404);
+    return { error: "That address isn't a Crossroads account. To send to your own wallet, use Withdraw.", code: "NOT_AN_ACCOUNT" };
+  }
+  return { account: acct.id, name: acct.name, via: acct.id === req.params.q.trim().toLowerCase() ? "account" : "deposit address" };
 });
 
 /** The exact text a client must sign for a request; keeps client and server in step. */

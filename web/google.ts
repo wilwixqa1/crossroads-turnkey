@@ -73,21 +73,44 @@ export const googleSession = {
   },
 };
 
+/** The sign-in has run out (or is about to). The page sends the user back to Continue with Google. */
+export class SessionExpired extends Error {
+  constructor() {
+    super("Your sign-in has expired. Continue with Google to pick up where you left off; your balances are unchanged.");
+  }
+}
+
+/** True when a session has less than a minute left, so nothing is sent to Turnkey that would fail halfway. */
+export function sessionExpired(s: Pick<GoogleSession, "expiresAt">, now = Date.now()): boolean {
+  return s.expiresAt <= now + 60_000;
+}
+
+/** Turnkey's answer to a request stamped with a session key past its expiry ("Turnkey error 16: expired api key"). */
+export function isExpiredKeyError(err: unknown): boolean {
+  return /expired api key|API_KEY_EXPIRED|error 16\b/i.test((err as Error)?.message ?? "");
+}
+
 /** Signs each request with the user's Turnkey wallet: one Turnkey signature, no pop-up. */
 export function turnkeySigner(s: GoogleSession): RequestSigner {
   const signer: RequestSigner = {
     address: s.address,
     description: "your Turnkey wallet",
+    expired: () => sessionExpired(s),
     async signMessage(message: string): Promise<Hex> {
+      if (sessionExpired(s)) throw new SessionExpired();
       const client = new TurnkeyClient({ baseUrl: TURNKEY_API }, await sessionStamper());
       const t0 = performance.now();
-      const res = await client.signRawPayload({
+      const res = await client
+        .signRawPayload({
         type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2",
         timestampMs: String(Date.now()),
         organizationId: s.organizationId,
         // NEXT PERSON: the ledger keeps addresses lowercase, but Turnkey only finds the wallet by its checksummed form.
         parameters: { signWith: getAddress(s.address), payload: hashMessage(message), encoding: "PAYLOAD_ENCODING_HEXADECIMAL", hashFunction: "HASH_FUNCTION_NO_OP" },
-      });
+      })
+        .catch((err: unknown) => {
+          throw isExpiredKeyError(err) ? new SessionExpired() : err;
+        });
       const sig = res.activity.result.signRawPayloadResult;
       if (res.activity.status !== "ACTIVITY_STATUS_COMPLETED" || !sig) throw new Error(`Turnkey did not sign (${res.activity.status})`);
       signer.lastActivity = { id: res.activity.id, ms: Math.round(performance.now() - t0) };

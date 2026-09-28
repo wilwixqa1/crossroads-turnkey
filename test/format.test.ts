@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtEth, parseEthInput, fmtMs, spotRate, isAddress } from "../web/format.js";
+import { fmtEth, parseEthInput, fmtMs, spotRate, isAddress, shortId } from "../web/format.js";
 import { EvmChain } from "../src/chains/evm.js";
 
 const ETH = 10n ** 18n;
@@ -43,5 +43,15 @@ describe("amounts in Under the hood sentences", () => {
     expect(EvmChain.fmt(ETH / 10n)).toBe("0.1");
     expect(EvmChain.fmt(1n)).toBe("less than 0.000001");
     expect(EvmChain.fmt(0n)).toBe("0");
+  });
+});
+
+describe("Turnkey activity IDs on the page", () => {
+  it("shows the first 4 and last 4 characters, so two activities in the same second still look different", () => {
+    const a = "01a0c3f2-1111-7000-8000-00000000e198";
+    const b = "01a0c3f2-2222-7000-8000-00000000f7c1";
+    expect(shortId(a)).toBe("01a0····e198");
+    expect(shortId(a)).not.toBe(shortId(b));
+    expect(shortId("act-1")).toBe("act-1");
   });
 });

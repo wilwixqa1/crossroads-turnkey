@@ -29,6 +29,11 @@ export function isAddress(s: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(s.trim());
 }
 
+/** A Turnkey activity ID the way Turnkey's dashboard shows it: first 4 and last 4 characters (IDs start with a timestamp). */
+export function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 4)}····${id.slice(-4)}` : id;
+}
+
 export function shortAddr(a: string): string {
   return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
 }

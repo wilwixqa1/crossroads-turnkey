@@ -30,6 +30,8 @@ export interface Vault {
   newDepositAddress(note?: VaultNote): Promise<string>;
   /** Sign a fully specified transaction for the given vault address. Returns the signed, serialized transaction. */
   signTransaction(fromAddress: string, tx: TransactionSerializable, note?: VaultNote): Promise<Hex>;
+  /** True if this vault holds the address and can sign for it. Used to re-link a user's earlier deposit address. */
+  holds(address: string): Promise<boolean>;
   /** Short name used in "Under the hood" sentences, e.g. "Turnkey" or "Stand-in vault". */
   readonly label: string;
   /** Human description for the "Under the hood" panel. */
@@ -45,6 +47,9 @@ export class PendingVault implements Vault {
   }
   async signTransaction(): Promise<Hex> {
     throw new Error("The Turnkey vault is still being set up");
+  }
+  async holds(): Promise<boolean> {
+    return false;
   }
   describe() {
     return `Turnkey vault not ready yet: ${this.reason}`;
@@ -76,6 +81,10 @@ export class LocalVault implements Vault {
     const acct = mnemonicToAccount(this.mnemonic, { addressIndex: this.nextIndex++ });
     this.accounts.set(acct.address.toLowerCase(), acct);
     return acct.address;
+  }
+
+  async holds(address: string): Promise<boolean> {
+    return this.accounts.has(address.toLowerCase());
   }
 
   async signTransaction(fromAddress: string, tx: TransactionSerializable, note?: VaultNote): Promise<Hex> {

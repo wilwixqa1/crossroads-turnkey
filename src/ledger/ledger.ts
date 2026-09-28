@@ -146,6 +146,15 @@ export class Ledger {
     return Object.values(this.state.accounts).find((x) => x.depositAddress === a);
   }
 
+  /**
+   * Who a Send goes to: an account ID, or a Crossroads deposit address (credited to its owner on the ledger, the way
+   * an exchange handles a transfer between two of its own users). Undefined if it is neither.
+   */
+  findRecipient(idOrDepositAddress: string): Account | undefined {
+    const q = idOrDepositAddress.trim().toLowerCase();
+    return this.state.accounts[q] ?? this.findByDepositAddress(q);
+  }
+
   /** Every vault deposit address the app must watch. */
   depositAddresses(): string[] {
     return Object.values(this.state.accounts).map((a) => a.depositAddress);
@@ -192,8 +201,9 @@ export class Ledger {
     assertAsset(asset);
     assertPositive(amount);
     const a = this.getAccount(from);
-    const b = this.getAccount(to);
-    if (a.id === b.id) throw new LedgerError("Cannot transfer to self", "SELF");
+    const b = this.findRecipient(to);
+    if (!b) throw new LedgerError("That address isn't a Crossroads account. To send to your own wallet, use Withdraw.", "NOT_AN_ACCOUNT");
+    if (a.id === b.id) throw new LedgerError("That is your own account", "SELF");
     if (a.balances[asset].available < amount) throw new LedgerError("Insufficient available balance", "INSUFFICIENT");
     a.balances[asset].available -= amount;
     b.balances[asset].available += amount;

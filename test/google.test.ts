@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { generatePrivateKey, privateKeyToAccount, sign } from "viem/accounts";
 import { hashMessage, verifyMessage } from "viem";
 import { UserDirectory, signupPolicy, type SignupCalls } from "../src/auth/google.js";
-import { nonceFor, signatureFromTurnkey } from "../web/google.js";
+import { nonceFor, signatureFromTurnkey, sessionExpired, isExpiredKeyError, turnkeySigner, SessionExpired } from "../web/google.js";
 
 const PUBLIC_KEY = "02" + "ab".repeat(32);
 const token = (claims: Record<string, unknown>) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
@@ -72,5 +72,24 @@ describe("Google sign-in through Turnkey", () => {
       const tk = { r: sig.r.slice(2), s: sig.s.slice(2), v: sig.yParity === 1 ? "01" : "00" };
       expect(await verifyMessage({ address, message: m, signature: signatureFromTurnkey(tk) })).toBe(true);
     }
+  });
+});
+
+describe("an expired Google sign-in", () => {
+  it("counts a session as expired a minute early, so no request fails halfway", () => {
+    const now = 1_000_000;
+    expect(sessionExpired({ expiresAt: now + 30_000 }, now)).toBe(true);
+    expect(sessionExpired({ expiresAt: now + 5 * 60_000 }, now)).toBe(false);
+  });
+
+  it("recognizes Turnkey's expired-key answer", () => {
+    expect(isExpiredKeyError(new Error("Turnkey error 16: expired api key"))).toBe(true);
+    expect(isExpiredKeyError(new Error("Turnkey error 7: You don't have sufficient permissions"))).toBe(false);
+  });
+
+  it("refuses to sign with an expired session before asking Turnkey, so no signature is spent", async () => {
+    const signer = turnkeySigner({ organizationId: "org", address: "0x" + "11".repeat(20), name: "A", session: "s", expiresAt: Date.now() - 1 });
+    expect(signer.expired?.()).toBe(true);
+    await expect(signer.signMessage("hi")).rejects.toBeInstanceOf(SessionExpired);
   });
 });

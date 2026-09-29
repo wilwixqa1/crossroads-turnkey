@@ -286,3 +286,21 @@ describe("withdrawal destinations", () => {
     expect(app.ledger.getAccount(alice.id).balances.ETH_SEPOLIA).toEqual({ available: parseEther("0.1") - 42_000n, pending: 0n });
   });
 });
+
+describe("network fees on Base", () => {
+  it("charges the L1 data fee a Base receipt reports on top of gas, so the ledger matches the chain exactly", async () => {
+    build();
+    let sent = false;
+    const primary = fakeClient({
+      sendRawTransaction: async () => ((sent = true), "0x"),
+      getTransactionReceipt: async () => (sent ? { status: "success", blockNumber: 900n, gasUsed: 21_000n, effectiveGasPrice: 2n, l1Fee: 1_000n } : notFound()),
+    });
+    useClients("ETH_BASE_SEPOLIA", primary);
+    const alice = await user("Alice");
+    app.ledger.creditDeposit("ETH_BASE_SEPOLIA", "0xd1", alice.depositAddress, parseEther("0.1"));
+    await alice.send("withdraw", { asset: "ETH_BASE_SEPOLIA", amount: parseEther("0.01").toString(), destination: OUTSIDE });
+    await app.processWithdrawals();
+    await app.processWithdrawals();
+    expect(app.ledger.getAccount(alice.id).balances.ETH_BASE_SEPOLIA).toEqual({ available: parseEther("0.09") - 42_000n - 1_000n, pending: 0n });
+  });
+});

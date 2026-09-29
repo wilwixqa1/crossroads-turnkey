@@ -8,6 +8,10 @@
  * All amounts are bigint in the asset's smallest unit (wei).
  */
 
+import { formatEther } from "viem";
+
+const formatEth = (wei: bigint) => formatEther(wei);
+
 export type Asset = "ETH_SEPOLIA" | "ETH_BASE_SEPOLIA";
 export const ASSETS: Asset[] = ["ETH_SEPOLIA", "ETH_BASE_SEPOLIA"];
 
@@ -25,7 +29,47 @@ export interface Account {
   /** Next request sequence number this account must use. */
   nextSeq: number;
   balances: Record<Asset, Balance>;
+  /** This account's share of the vault's pooled Aave supply, per asset (see Earn below). */
+  earnShares?: Partial<Record<Asset, bigint>>;
   createdAt: number;
+}
+
+export type EarnStatus = "pending" | "approving" | "sent" | "complete" | "failed";
+
+/**
+ * Moving a user's funds into or out of the vault's pooled Aave supply.
+ *
+ * Supply: the amount (plus a fee reserve) is locked as pending, the vault supplies it to Aave from one of its
+ * addresses, and on confirmation the user gets shares of the pool. Redeem: the user's shares are set aside, the vault
+ * withdraws that much ETH from Aave, and on confirmation the user's available balance gets it, less the network fees.
+ */
+export interface EarnOp {
+  id: string;
+  account: string;
+  asset: Asset;
+  kind: "supply" | "redeem";
+  amount: bigint;
+  /** Supply: shares minted on completion. Redeem: shares set aside at request, burned on completion. */
+  shares: bigint;
+  /** Supply only: network fee reserve locked with the amount. */
+  feeReserved: bigint;
+  /** Network fees actually paid so far (approve + withdraw for a redeem). */
+  feePaid: bigint;
+  status: EarnStatus;
+  fromAddress?: string;
+  txHash?: string;
+  approveTxHash?: string;
+  nonce?: number;
+  ref?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface EarnState {
+  /** Total shares outstanding per asset. Their value is the vault's aWETH across all its addresses. */
+  shares: Partial<Record<Asset, bigint>>;
+  ops: Record<string, EarnOp>;
 }
 
 export type WithdrawalStatus = "pending" | "sent" | "complete" | "failed";
@@ -68,7 +112,11 @@ export interface LedgerEvent {
     | "withdraw_requested"
     | "withdraw_sent"
     | "withdraw_complete"
-    | "withdraw_failed";
+    | "withdraw_failed"
+    | "earn_requested"
+    | "earn_sent"
+    | "earn_complete"
+    | "earn_failed";
   settlement: "instant" | "onchain";
   detail: Record<string, string | number>;
 }
@@ -79,6 +127,7 @@ export interface LedgerState {
   deposits: Record<string, string>;
   withdrawals: Record<string, Withdrawal>;
   pool: Pool;
+  earn?: EarnState;
   events: LedgerEvent[];
   nextEventId: number;
 }
@@ -349,6 +398,141 @@ export class Ledger {
     let t = this.state.pool.reserves[asset];
     for (const a of Object.values(this.state.accounts)) t += a.balances[asset].available + a.balances[asset].pending;
     return t;
+  }
+
+  // ---------- earn (pooled Aave supply) ----------
+
+  get earn(): EarnState {
+    return (this.state.earn ??= { shares: {}, ops: {} });
+  }
+
+  totalShares(asset: Asset): bigint {
+    return this.earn.shares[asset] ?? 0n;
+  }
+
+  sharesOf(accountId: string, asset: Asset): bigint {
+    return this.getAccount(accountId).earnShares?.[asset] ?? 0n;
+  }
+
+  /** What an account's shares are worth, given the vault's total supplied (its aWETH, read from the chain). */
+  earningValue(accountId: string, asset: Asset, supplied: bigint): bigint {
+    const total = this.totalShares(asset);
+    return total === 0n ? 0n : (this.sharesOf(accountId, asset) * supplied) / total;
+  }
+
+  private newEarnId(): string {
+    return String(Object.keys(this.earn.ops).length + 1);
+  }
+
+  /** Lock an amount (plus a fee reserve) to be supplied to Aave. */
+  requestSupply(accountId: string, asset: Asset, amount: bigint, feeReserved: bigint, ref?: string): EarnOp {
+    assertAsset(asset);
+    if (amount <= 0n) throw new LedgerError("Amount must be positive", "BAD_AMOUNT");
+    const acct = this.getAccount(accountId);
+    const bal = acct.balances[asset];
+    if (bal.available < amount + feeReserved) throw new LedgerError(`Insufficient balance: the supply plus a network fee of up to ${formatEth(feeReserved)} ETH is more than you have available`, "INSUFFICIENT");
+    bal.available -= amount + feeReserved;
+    bal.pending += amount + feeReserved;
+    const op: EarnOp = { id: this.newEarnId(), account: acct.id, asset, kind: "supply", amount, shares: 0n, feeReserved, feePaid: 0n, status: "pending", ref, createdAt: Date.now(), updatedAt: Date.now() };
+    this.earn.ops[op.id] = op;
+    this.emit({ kind: "earn_requested", account: acct.id, settlement: "onchain", detail: { earnId: op.id, direction: "supply", asset, amount: amount.toString() } });
+    return op;
+  }
+
+  /**
+   * Set aside shares worth `amount` (or all of them) to be withdrawn from Aave. The shares stay in the pool's total
+   * until the withdrawal confirms, so the price of everyone else's shares does not move meanwhile.
+   */
+  requestRedeem(accountId: string, asset: Asset, amount: bigint | "all", supplied: bigint, ref?: string): EarnOp {
+    assertAsset(asset);
+    const acct = this.getAccount(accountId);
+    const mine = this.sharesOf(acct.id, asset);
+    const total = this.totalShares(asset);
+    if (mine === 0n || total === 0n || supplied === 0n) throw new LedgerError("You have nothing earning on Aave", "NOTHING_EARNING");
+    let shares: bigint;
+    let value: bigint;
+    if (amount === "all") {
+      shares = mine;
+      value = (mine * supplied) / total;
+    } else {
+      if (amount <= 0n) throw new LedgerError("Amount must be positive", "BAD_AMOUNT");
+      shares = (amount * total + supplied - 1n) / supplied; // round up: the user gives up at least what they take
+      if (shares > mine) throw new LedgerError(`That is more than you have earning (${formatEth((mine * supplied) / total)} ETH)`, "INSUFFICIENT");
+      value = amount;
+    }
+    acct.earnShares![asset] = mine - shares;
+    const op: EarnOp = { id: this.newEarnId(), account: acct.id, asset, kind: "redeem", amount: value, shares, feeReserved: 0n, feePaid: 0n, status: "pending", ref, createdAt: Date.now(), updatedAt: Date.now() };
+    this.earn.ops[op.id] = op;
+    this.emit({ kind: "earn_requested", account: acct.id, settlement: "onchain", detail: { earnId: op.id, direction: "redeem", asset, amount: value.toString() } });
+    return op;
+  }
+
+  getEarnOp(id: string): EarnOp {
+    const op = this.earn.ops[id];
+    if (!op) throw new LedgerError("Unknown earn operation", "NO_EARN_OP");
+    return op;
+  }
+
+  /** An approval (redeem only) or the Aave call itself was broadcast. */
+  markEarnSent(id: string, fields: { txHash?: string; approveTxHash?: string; fromAddress: string; nonce: number }) {
+    const op = this.getEarnOp(id);
+    Object.assign(op, fields, { status: fields.approveTxHash && !fields.txHash ? "approving" : "sent", updatedAt: Date.now() });
+    if (fields.txHash) this.emit({ kind: "earn_sent", account: op.account, settlement: "onchain", detail: { earnId: id, txHash: fields.txHash, direction: op.kind } });
+  }
+
+  /** The approval confirmed: back to pending, so the withdrawal itself is sent next. */
+  approvalConfirmed(id: string, fee: bigint) {
+    const op = this.getEarnOp(id);
+    op.feePaid += fee;
+    op.status = "pending";
+    op.updatedAt = Date.now();
+  }
+
+  /**
+   * The supply or withdrawal confirmed. For a supply, `supplied` is the vault's total aWETH read after it landed: the
+   * new shares are priced at what the pool was worth before this supply.
+   */
+  completeEarn(id: string, fee: bigint, supplied: bigint) {
+    const op = this.getEarnOp(id);
+    if (op.status === "complete") throw new LedgerError("Already complete", "BAD_STATE");
+    op.feePaid += fee;
+    const acct = this.getAccount(op.account);
+    const bal = acct.balances[op.asset];
+    if (op.kind === "supply") {
+      const total = this.totalShares(op.asset);
+      const before = supplied - op.amount;
+      op.shares = total === 0n || before <= 0n ? op.amount : (op.amount * total) / before;
+      bal.pending -= op.amount + op.feeReserved;
+      bal.available += op.feeReserved - op.feePaid;
+      acct.earnShares = { ...(acct.earnShares ?? {}), [op.asset]: (acct.earnShares?.[op.asset] ?? 0n) + op.shares };
+      this.earn.shares[op.asset] = total + op.shares;
+    } else {
+      this.earn.shares[op.asset] = this.totalShares(op.asset) - op.shares;
+      bal.available += op.amount - op.feePaid;
+    }
+    op.status = "complete";
+    op.updatedAt = Date.now();
+    this.emit({ kind: "earn_complete", account: op.account, settlement: "onchain", detail: { earnId: id, direction: op.kind, asset: op.asset, amount: op.amount.toString(), fee: op.feePaid.toString() } });
+  }
+
+  /** It could not be done (refused, or reverted). Everything goes back, less network fees really paid. */
+  failEarn(id: string, error: string, feePaid = 0n) {
+    const op = this.getEarnOp(id);
+    if (op.status === "complete") throw new LedgerError("Already complete", "BAD_STATE");
+    op.feePaid += feePaid;
+    const acct = this.getAccount(op.account);
+    const bal = acct.balances[op.asset];
+    if (op.kind === "supply") {
+      bal.pending -= op.amount + op.feeReserved;
+      bal.available += op.amount + op.feeReserved - op.feePaid;
+    } else {
+      acct.earnShares![op.asset] = (acct.earnShares?.[op.asset] ?? 0n) + op.shares;
+      bal.available -= op.feePaid; // a paid approval is a real cost even if the withdrawal then failed
+    }
+    op.status = "failed";
+    op.error = error;
+    op.updatedAt = Date.now();
+    this.emit({ kind: "earn_failed", account: op.account, settlement: "onchain", detail: { earnId: id, direction: op.kind, error } });
   }
 
   // ---------- events ----------

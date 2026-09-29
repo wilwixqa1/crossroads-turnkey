@@ -10,10 +10,12 @@
  *   pollDeposits()     every few seconds, per chain: heads-up at the tip, credit once confirmed
  *   processWithdrawals() sign+send pending ones, settle sent ones
  */
-import { Ledger, LedgerError, type Asset, type Account, type Withdrawal } from "./ledger/ledger.js";
+import { encodeFunctionData, type Hex } from "viem";
+import { Ledger, LedgerError, type Asset, type Account, type EarnOp, type Withdrawal } from "./ledger/ledger.js";
 import { verifyRequest, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor } from "./chains/config.js";
 import { EvmChain, VaultRefusal } from "./chains/evm.js";
+import { ERC20_ABI, GATEWAY_ABI, aaveMarket } from "./chains/aave.js";
 import type { Vault, VaultNote } from "./signer/index.js";
 import { loadState, saveState, type AppState } from "./storage/state.js";
 
@@ -56,6 +58,8 @@ export interface HoodEntry {
   activityId?: string;
   /** The Turnkey policy decision, by policy name. */
   policy?: string;
+  /** A contract call as Turnkey read it, e.g. "Aave depositETH, 0.02 ETH, on behalf of 0x…". */
+  call?: string;
   /** The user action this line belongs to: `req:<account>:<seq>` or `signin:<account>:<time>`. */
   ref?: string;
 }
@@ -76,7 +80,14 @@ const ACTION_NAMES: Record<SignedRequest["action"], string> = {
   swap: "Swap",
   withdraw: "Withdrawal request",
   add_liquidity: "Liquidity",
+  earn_start: "Start earning",
+  earn_stop: "Stop earning",
 };
+
+/** Gas the fee reserve for an Aave supply assumes. The real use is about 200,000; the unused part is refunded. */
+const SUPPLY_GAS = 300_000n;
+/** How much the vault lets Aave's gateway take back from one address at a time (one approval covers many withdrawals). */
+const GATEWAY_ALLOWANCE = 10n ** 19n;
 
 export class App {
   ledger: Ledger;
@@ -172,7 +183,7 @@ export class App {
       const settledMs = Math.round((performance.now() - t0) * 100) / 100;
       // Stamp the settlement time on the events this request produced, so the activity feed can show it.
       for (const e of this.ledger.state.events) if (e.id >= firstEvent) e.detail.settledMs = settledMs;
-      if (req.action !== "withdraw") this.log({ source: "ledger", account: acct.id, ref, text: `${ACTION_NAMES[req.action]} settled on the ledger. No blockchain involved.`, ms: settledMs });
+      if (!["withdraw", "earn_start", "earn_stop"].includes(req.action)) this.log({ source: "ledger", account: acct.id, ref, text: `${ACTION_NAMES[req.action]} settled on the ledger. No blockchain involved.`, ms: settledMs });
       return { ...result, settledMs, ref };
     } finally {
       this.save();
@@ -209,9 +220,165 @@ export class App {
         this.log({ source: "ledger", account: acct.id, ref, text: `Locked ${EvmChain.fmt(amount)} ETH plus a ${EvmChain.fmt(fee)} ETH fee reserve for withdrawal #${w.id}. Nothing is signed until the funds are locked.` });
         return { ok: true, withdrawalId: w.id, feeReserved: fee.toString() };
       }
+      case "earn_start": {
+        if (!aaveMarket(asset)) throw new LedgerError("Earning is not available for that asset", "NO_EARN");
+        const amount = BigInt(p.amount);
+        const fee = await this.chains.get(asset)!.feeFor(SUPPLY_GAS);
+        const op = this.ledger.requestSupply(acct.id, asset, amount, fee, ref);
+        this.log({ source: "ledger", account: acct.id, ref, text: `Locked ${EvmChain.fmt(amount)} ETH plus a ${EvmChain.fmt(fee)} ETH fee reserve to supply to Aave. Nothing is signed until the funds are locked.` });
+        return { ok: true, earnId: op.id };
+      }
+      case "earn_stop": {
+        if (!aaveMarket(asset)) throw new LedgerError("Earning is not available for that asset", "NO_EARN");
+        const supplied = await this.refreshEarn(asset);
+        const op = this.ledger.requestRedeem(acct.id, asset, p.amount === "all" ? "all" : BigInt(p.amount), supplied, ref);
+        this.log({ source: "ledger", account: acct.id, ref, text: `Set aside your share of the pool worth ${EvmChain.fmt(op.amount)} ETH to take back from Aave. It stays in the pool until Aave returns it.` });
+        return { ok: true, earnId: op.id };
+      }
       default:
         throw new LedgerError(`Unknown action ${req.action}`, "BAD_ACTION");
     }
+  }
+
+  // ---------- earn (pooled Aave supply) ----------
+
+  /** The vault's Aave position per asset, refreshed from the chain: total supplied, per address, and the rate. */
+  earnInfo: Partial<Record<Asset, { supplied: bigint; byAddress: Record<string, bigint>; rate: bigint; at: number }>> = {};
+
+  /** Read the vault's aWETH across all its addresses (the pool's value) and Aave's current rate. */
+  async refreshEarn(asset: Asset): Promise<bigint> {
+    const market = aaveMarket(asset);
+    if (!market) return 0n;
+    const chain = this.chains.get(asset)!;
+    const byAddress: Record<string, bigint> = {};
+    let supplied = 0n;
+    for (const addr of this.ledger.depositAddresses()) {
+      const b = await chain.tokenBalance(market.aWeth, addr);
+      if (b > 0n) byAddress[addr] = b;
+      supplied += b;
+    }
+    const prev = this.earnInfo[asset];
+    const rate = prev && Date.now() - prev.at < 60_000 ? prev.rate : await chain.aaveSupplyRate(market.pool, market.weth);
+    this.earnInfo[asset] = { supplied, byAddress, rate, at: prev && Date.now() - prev.at < 60_000 ? prev.at : Date.now() };
+    return supplied;
+  }
+
+  private async processEarn() {
+    for (const op of Object.values(this.ledger.earn.ops).filter((o) => o.status === "pending")) await this.sendEarn(op);
+    for (const op of Object.values(this.ledger.earn.ops).filter((o) => o.status === "approving" || o.status === "sent")) {
+      try {
+        await this.settleEarn(op);
+      } catch (err) {
+        console.warn(`settle earn ${op.id}: ${(err as Error).message}`); // network trouble: try again next round
+      }
+    }
+  }
+
+  private async sendEarn(op: EarnOp) {
+    const chain = this.chains.get(op.asset)!;
+    const market = aaveMarket(op.asset)!;
+    const acct = this.ledger.getAccount(op.account);
+    const turnkey = this.vault.label === "Turnkey";
+    const signer = turnkey ? ("vault signer" as const) : undefined;
+    const t0 = performance.now();
+    try {
+      const note: VaultNote = {};
+      if (op.kind === "supply") {
+        const need = op.amount + op.feeReserved;
+        const candidates = [acct.depositAddress, ...this.ledger.depositAddresses().filter((a) => a !== acct.depositAddress)];
+        let from: string | undefined;
+        for (const addr of candidates) {
+          if ((await chain.balanceOf(addr)) >= need) {
+            from = addr;
+            break;
+          }
+        }
+        if (!from) {
+          this.ledger.failEarn(op.id, "No single vault address holds enough on this chain");
+          this.log({ source: "ledger", account: op.account, ref: op.ref, text: `Not supplied: no single vault address holds enough on ${chain.cfg.chain.name}. Funds unlocked.` });
+          return;
+        }
+        const data = encodeFunctionData({ abi: GATEWAY_ABI, functionName: "depositETH", args: [market.pool, from as Hex, 0] });
+        const gas = await chain.estimateCallGas(from, { to: market.gateway, data, value: op.amount });
+        const sent = await chain.sendFromVault(this.vault, from, { to: market.gateway, data, value: op.amount, gas }, note);
+        this.ledger.markEarnSent(op.id, { txHash: sent.txHash, fromAddress: from, nonce: sent.nonce });
+        this.log({ source: "turnkey", account: op.account, ref: op.ref, key: signer, activityId: note.activityId, policy: note.policy, call: note.call, ms: Math.round(performance.now() - t0), text: `The vault's signer asked ${this.vault.label} to supply ${EvmChain.fmt(op.amount)} ETH to Aave from vault address ${from}. ${this.vault.label} read the call, checked its policies and signed.` });
+        this.log({ source: "chain", account: op.account, ref: op.ref, text: `Broadcast the Aave supply to ${chain.cfg.chain.name}. Waiting for it to confirm.`, link: chain.cfg.explorerTx(sent.txHash) });
+        return;
+      }
+      // Redeem: from the address the approval went through, or one holding enough aWETH and enough ETH for gas.
+      await this.refreshEarn(op.asset);
+      const held = this.earnInfo[op.asset]?.byAddress ?? {};
+      let from = op.fromAddress;
+      if (!from) {
+        for (const [addr, a] of Object.entries(held)) {
+          if (a >= op.amount && (await chain.balanceOf(addr)) >= (await chain.feeFor(500_000n))) {
+            from = addr;
+            break;
+          }
+        }
+      }
+      if (!from) {
+        this.ledger.failEarn(op.id, "No single vault address holds enough on Aave, with gas");
+        this.log({ source: "ledger", account: op.account, ref: op.ref, text: `Not taken back: no single vault address holds that much on Aave plus gas. Your share is back in the pool.` });
+        return;
+      }
+      if (held[from] !== undefined && held[from] < op.amount) op.amount = held[from]; // Aave's rounding: at most a few wei
+      if ((await chain.allowance(market.aWeth, from, market.gateway)) < op.amount) {
+        const data = encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [market.gateway, GATEWAY_ALLOWANCE] });
+        const gas = await chain.estimateCallGas(from, { to: market.aWeth, data });
+        const sent = await chain.sendFromVault(this.vault, from, { to: market.aWeth, data, gas }, note);
+        this.ledger.markEarnSent(op.id, { approveTxHash: sent.txHash, fromAddress: from, nonce: sent.nonce });
+        this.log({ source: "turnkey", account: op.account, ref: op.ref, key: signer, activityId: note.activityId, policy: note.policy, call: note.call, ms: Math.round(performance.now() - t0), text: `First, the vault's signer asked ${this.vault.label} to let Aave's gateway take back aWETH from vault address ${from}. ${this.vault.label} read the call, checked its policies and signed.` });
+        this.log({ source: "chain", account: op.account, ref: op.ref, text: `Broadcast the approval to ${chain.cfg.chain.name}. The withdrawal from Aave follows once it confirms.`, link: chain.cfg.explorerTx(sent.txHash) });
+        return;
+      }
+      const data = encodeFunctionData({ abi: GATEWAY_ABI, functionName: "withdrawETH", args: [market.pool, op.amount, from as Hex] });
+      const gas = await chain.estimateCallGas(from, { to: market.gateway, data });
+      const sent = await chain.sendFromVault(this.vault, from, { to: market.gateway, data, gas }, note);
+      this.ledger.markEarnSent(op.id, { txHash: sent.txHash, fromAddress: from, nonce: sent.nonce });
+      this.log({ source: "turnkey", account: op.account, ref: op.ref, key: signer, activityId: note.activityId, policy: note.policy, call: note.call, ms: Math.round(performance.now() - t0), text: `The vault's signer asked ${this.vault.label} to withdraw ${EvmChain.fmt(op.amount)} ETH from Aave back to vault address ${from}. ${this.vault.label} read the call, checked its policies and signed.` });
+      this.log({ source: "chain", account: op.account, ref: op.ref, text: `Broadcast the Aave withdrawal to ${chain.cfg.chain.name}. Waiting for it to confirm.`, link: chain.cfg.explorerTx(sent.txHash) });
+    } catch (err) {
+      // Nothing was signed on any path that reaches here, so undoing the request cannot double-spend.
+      const msg = (err as Error).message.split("\n")[0];
+      this.ledger.failEarn(op.id, msg);
+      if (err instanceof VaultRefusal) {
+        this.log({ source: "turnkey", account: op.account, ref: op.ref, key: signer, activityId: err.note.activityId, policy: err.note.policy, call: err.note.call, text: `${this.vault.label} refused to sign: ${msg}. Nothing was signed.`, ms: Math.round(performance.now() - t0) });
+      } else {
+        this.log({ source: "chain", account: op.account, ref: op.ref, text: `Not sent: ${msg}. Everything is back where it was.` });
+      }
+    } finally {
+      this.save();
+    }
+  }
+
+  private async settleEarn(op: EarnOp) {
+    const chain = this.chains.get(op.asset)!;
+    const hash = op.status === "approving" ? op.approveTxHash! : op.txHash!;
+    const res = await chain.withdrawalResult(hash);
+    if (res.state === "unconfirmed") return;
+    if (res.state === "unknown") {
+      if (op.nonce === undefined || Date.now() - op.updatedAt < App.DROP_GRACE_MS) return;
+      if (!(await chain.wasDropped(hash, op.fromAddress!, op.nonce))) return;
+      this.ledger.failEarn(op.id, "transaction dropped");
+      this.log({ source: "chain", account: op.account, ref: op.ref, text: `The transaction never reached the chain and another used its slot. Everything is back where it was.` });
+      this.save();
+      return;
+    }
+    if (!res.success) {
+      this.ledger.failEarn(op.id, "transaction reverted", res.feeActual);
+      this.log({ source: "chain", account: op.account, ref: op.ref, text: `It reverted on-chain. Everything is back, less the ${EvmChain.fmt(res.feeActual)} ETH network fee it used.`, link: chain.cfg.explorerTx(hash) });
+    } else if (op.status === "approving") {
+      this.ledger.approvalConfirmed(op.id, res.feeActual);
+      this.log({ source: "chain", account: op.account, ref: op.ref, text: `Approval confirmed. Sending the withdrawal from Aave next.`, link: chain.cfg.explorerTx(hash) });
+    } else {
+      const supplied = await this.refreshEarn(op.asset);
+      this.ledger.completeEarn(op.id, res.feeActual, supplied);
+      const what = op.kind === "supply" ? `Aave confirmed the supply. ${EvmChain.fmt(op.amount)} ETH is now earning in the vault's pooled position.` : `Aave returned ${EvmChain.fmt(op.amount)} ETH to the vault. It is in your available balance, less ${EvmChain.fmt(op.feePaid)} ETH in network fees.`;
+      this.log({ source: "chain", account: op.account, ref: op.ref, text: what, link: chain.cfg.explorerTx(hash) });
+    }
+    this.save();
   }
 
   // ---------- deposit loop ----------
@@ -325,6 +492,8 @@ export class App {
           console.warn(`settle ${w.id}: ${(err as Error).message}`); // network trouble: try again next round
         }
       }
+      // Same loop as withdrawals, never alongside it: both take transaction numbers from the same vault addresses.
+      await this.processEarn();
     } finally {
       this.busy.delete("withdrawals");
     }
@@ -404,14 +573,20 @@ export class App {
 
   // ---------- solvency ----------
 
-  async solvency(): Promise<Record<Asset, { onChain: string; owed: string; ok: boolean }>> {
-    const out = {} as Record<Asset, { onChain: string; owed: string; ok: boolean }>;
+  /**
+   * On-chain holdings against what the ledger owes. Funds supplied to Aave count on both sides: the vault's aWETH is
+   * held, and every earning balance is owed (together they are exactly the aWETH, by how shares are priced).
+   */
+  async solvency(): Promise<Record<Asset, { onChain: string; owed: string; ok: boolean; earning: string }>> {
+    const out = {} as Record<Asset, { onChain: string; owed: string; ok: boolean; earning: string }>;
     for (const cfg of CHAINS) {
       const chain = this.chains.get(cfg.asset)!;
-      let onChain = 0n;
-      for (const addr of this.ledger.depositAddresses()) onChain += await chain.balanceOf(addr);
-      const owed = this.ledger.totalLiabilities(cfg.asset);
-      out[cfg.asset] = { onChain: onChain.toString(), owed: owed.toString(), ok: onChain >= owed };
+      let eth = 0n;
+      for (const addr of this.ledger.depositAddresses()) eth += await chain.balanceOf(addr);
+      const earning = aaveMarket(cfg.asset) ? await this.refreshEarn(cfg.asset) : 0n;
+      const onChain = eth + earning;
+      const owed = this.ledger.totalLiabilities(cfg.asset) + (this.ledger.totalShares(cfg.asset) > 0n ? earning : 0n);
+      out[cfg.asset] = { onChain: onChain.toString(), owed: owed.toString(), ok: onChain >= owed, earning: earning.toString() };
     }
     return out;
   }
@@ -424,6 +599,8 @@ export class App {
       this.timers.push(setInterval(() => void this.pollDeposits(cfg.asset), every));
     }
     this.timers.push(setInterval(() => void this.processWithdrawals(), 4_000));
+    // Keep the Earning column current: the vault's aWETH grows every block.
+    for (const cfg of CHAINS) if (aaveMarket(cfg.asset)) this.timers.push(setInterval(() => void this.refreshEarn(cfg.asset).catch(() => undefined), 5_000));
   }
 
   stop() {

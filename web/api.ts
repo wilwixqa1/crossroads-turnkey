@@ -22,6 +22,8 @@ export interface Status {
   withdrawalCaps: Record<Asset, string>;
   /** Set when the vault's last policy update failed; the vault runs on the policies it already had. */
   policyProblem: string | null;
+  /** Earn: Aave's current yearly rate and the vault's pooled supply, per asset that can earn. */
+  earn: Partial<Record<Asset, { network: string; ratePercent: number | null; supplied: string; supplyCap?: string }>>;
   liquidityProvider: string | null;
   pool: Record<Asset, string>;
   accounts: number;
@@ -70,12 +72,25 @@ export interface IncomingView {
   link: string;
 }
 
+export interface EarnOpView {
+  id: string;
+  asset: Asset;
+  kind: "supply" | "redeem";
+  amount: string;
+  status: "pending" | "approving" | "sent" | "complete" | "failed";
+  link?: string;
+  error?: string;
+}
+
 export interface AccountView {
   id: string;
   name: string;
   depositAddress: string;
   nextSeq: number;
   balances: Record<Asset, Balance>;
+  /** What this account's share of the vault's pooled Aave supply is worth now (wei), for assets that can earn. */
+  earning: Partial<Record<Asset, string>>;
+  earnOps: EarnOpView[];
   events: FeedEvent[];
   withdrawals: WithdrawalView[];
   incoming: IncomingView[];
@@ -89,6 +104,8 @@ export interface HoodEntry {
   key?: "your wallet" | "vault signer" | "vault admin" | "sign-up key";
   activityId?: string;
   policy?: string;
+  /** A contract call as Turnkey read it. */
+  call?: string;
   ref?: string;
   ms?: number;
   source: "turnkey" | "wallet" | "chain" | "ledger";

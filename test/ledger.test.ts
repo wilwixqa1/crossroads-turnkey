@@ -135,3 +135,60 @@ describe("Send recipients", () => {
     expect(() => l.transfer(ALICE, VAULT_A, "ETH_SEPOLIA", 1n)).toThrow(/your own account/);
   });
 });
+
+describe("Earn: pooled Aave supply with per-user shares", () => {
+  const A = "ETH_BASE_SEPOLIA" as const;
+  const fund = (l: Ledger) => {
+    l.creditDeposit(A, "0xa1", VAULT_A, ETH);
+    l.creditDeposit(A, "0xb1", VAULT_B, ETH);
+  };
+
+  it("locks a supply until it confirms, then gives shares and refunds the unused fee reserve", () => {
+    const l = setup();
+    fund(l);
+    const op = l.requestSupply(ALICE, A, ETH / 50n, 1000n);
+    expect(l.getAccount(ALICE).balances[A]).toEqual({ available: ETH - ETH / 50n - 1000n, pending: ETH / 50n + 1000n });
+    l.completeEarn(op.id, 400n, ETH / 50n);
+    expect(l.getAccount(ALICE).balances[A]).toEqual({ available: ETH - ETH / 50n - 400n, pending: 0n });
+    expect(l.earningValue(ALICE, A, ETH / 50n)).toBe(ETH / 50n);
+  });
+
+  it("prices a later supply at the pool's value, so earlier savers keep the interest they earned", () => {
+    const l = setup();
+    fund(l);
+    l.completeEarn(l.requestSupply(ALICE, A, 1000n, 0n).id, 0n, 1000n);
+    // The pool earned 10% before Bob joined; his 1000 lands on top of 1100.
+    l.completeEarn(l.requestSupply(BOB, A, 1000n, 0n).id, 0n, 2100n);
+    expect(l.earningValue(ALICE, A, 2100n)).toBe(1100n);
+    expect(l.earningValue(BOB, A, 2100n)).toBe(999n); // rounding favors the pool, never the newcomer
+  });
+
+  it("redeems part or all of a position, keeping the shares out of reach until it confirms", () => {
+    const l = setup();
+    fund(l);
+    l.completeEarn(l.requestSupply(ALICE, A, 1000n, 0n).id, 0n, 1000n);
+    const part = l.requestRedeem(ALICE, A, 400n, 1000n);
+    expect(l.earningValue(ALICE, A, 1000n)).toBe(600n);
+    expect(() => l.requestRedeem(ALICE, A, 700n, 1000n)).toThrow(/more than you have earning/);
+    l.completeEarn(part.id, 50n, 1000n);
+    expect(l.getAccount(ALICE).balances[A].available).toBe(ETH - 1000n + 400n - 50n);
+    const rest = l.requestRedeem(ALICE, A, "all", 600n);
+    expect(rest.amount).toBe(600n);
+    l.completeEarn(rest.id, 0n, 600n);
+    expect(l.totalShares(A)).toBe(0n);
+  });
+
+  it("gives everything back when an earn operation fails, less any fee really paid", () => {
+    const l = setup();
+    fund(l);
+    const s = l.requestSupply(ALICE, A, 1000n, 100n);
+    l.failEarn(s.id, "refused");
+    expect(l.getAccount(ALICE).balances[A]).toEqual({ available: ETH, pending: 0n });
+    l.completeEarn(l.requestSupply(ALICE, A, 1000n, 0n).id, 0n, 1000n);
+    const r = l.requestRedeem(ALICE, A, "all", 1000n);
+    l.approvalConfirmed(r.id, 30n);
+    l.failEarn(r.id, "reverted", 20n);
+    expect(l.earningValue(ALICE, A, 1000n)).toBe(1000n);
+    expect(l.getAccount(ALICE).balances[A].available).toBe(ETH - 1000n - 50n);
+  });
+});

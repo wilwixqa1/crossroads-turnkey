@@ -13,6 +13,7 @@
 import { createPublicClient, http, formatEther, keccak256, type PublicClient, type Hex, type TransactionSerializable } from "viem";
 import type { ChainConfig } from "./config.js";
 import { VaultError, type Vault, type VaultNote } from "../signer/index.js";
+import { ERC20_ABI, POOL_ABI } from "./aave.js";
 
 export interface FoundDeposit {
   asset: ChainConfig["asset"];
@@ -41,6 +42,15 @@ export class VaultRefusal extends Error {
   constructor(message: string, readonly note: VaultNote = {}) {
     super(message);
   }
+}
+
+/**
+ * What a transaction really cost its sender. On Base (an OP-stack chain) that is the gas fee plus an L1 data fee,
+ * which the receipt reports separately; leaving it out makes the ledger think the vault holds a few gwei more than
+ * it does on every Base transaction, and the proof page's solvency check reads "Short".
+ */
+export function feePaid(receipt: { gasUsed: bigint; effectiveGasPrice: bigint; l1Fee?: bigint | null }): bigint {
+  return receipt.gasUsed * receipt.effectiveGasPrice + (receipt.l1Fee ?? 0n);
 }
 
 export class EvmChain {
@@ -131,6 +141,23 @@ export class EvmChain {
    * returned instead, because the transaction may still reach the chain.
    */
   async sendWithdrawal(vault: Vault, fromAddress: string, to: string, amount: bigint, note?: VaultNote): Promise<SentWithdrawal> {
+    return this.sendFromVault(vault, fromAddress, { to: to as Hex, value: amount, gas: 21_000n }, note);
+  }
+
+  /** Estimate a contract call's gas from a vault address, with 30% headroom (Aave's gas use varies a little). */
+  async estimateCallGas(fromAddress: string, call: { to: Hex; data: Hex; value?: bigint }): Promise<bigint> {
+    const gas = await this.primary.estimateGas({ account: fromAddress as Hex, to: call.to, data: call.data, value: call.value ?? 0n });
+    return (gas * 13n) / 10n;
+  }
+
+  /** Worst-case network fee for a call with this much gas, at today's fee levels. */
+  async feeFor(gas: bigint): Promise<bigint> {
+    const fees = await this.primary.estimateFeesPerGas();
+    return gas * fees.maxFeePerGas;
+  }
+
+  /** Have the vault sign a transaction from one of its addresses and broadcast it. The vault's policy decides. */
+  async sendFromVault(vault: Vault, fromAddress: string, call: { to: Hex; value?: bigint; data?: Hex; gas: bigint }, note?: VaultNote): Promise<SentWithdrawal> {
     const [nonce, fees] = await Promise.all([
       this.primary.getTransactionCount({ address: fromAddress as Hex, blockTag: "pending" }),
       this.primary.estimateFeesPerGas(),
@@ -138,10 +165,11 @@ export class EvmChain {
     const tx: TransactionSerializable = {
       chainId: this.cfg.chain.id,
       type: "eip1559",
-      to: to as Hex,
-      value: amount,
+      to: call.to,
+      value: call.value ?? 0n,
+      data: call.data,
       nonce,
-      gas: 21_000n,
+      gas: call.gas,
       maxFeePerGas: fees.maxFeePerGas,
       maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
     };
@@ -166,7 +194,7 @@ export class EvmChain {
     if (!receipt) return { state: "unknown" };
     const head = await this.primary.getBlockNumber();
     if (head - receipt.blockNumber < BigInt(this.cfg.confirmations)) return { state: "unconfirmed" };
-    return { state: "done", feeActual: receipt.gasUsed * receipt.effectiveGasPrice, success: receipt.status === "success" };
+    return { state: "done", feeActual: feePaid(receipt), success: receipt.status === "success" };
   }
 
   /**
@@ -196,6 +224,21 @@ export class EvmChain {
   async isPlainWallet(address: string): Promise<boolean> {
     const code = await this.primary.getCode({ address: address as Hex });
     return !code || code === "0x";
+  }
+
+  /** An ERC-20 balance (the vault's aWETH, for Earn). */
+  async tokenBalance(token: Hex, owner: string): Promise<bigint> {
+    return this.primary.readContract({ address: token, abi: ERC20_ABI, functionName: "balanceOf", args: [owner as Hex] });
+  }
+
+  async allowance(token: Hex, owner: string, spender: Hex): Promise<bigint> {
+    return this.primary.readContract({ address: token, abi: ERC20_ABI, functionName: "allowance", args: [owner as Hex, spender] });
+  }
+
+  /** Aave's current yearly supply rate for WETH, in ray (1e27 = 100%). */
+  async aaveSupplyRate(pool: Hex, weth: Hex): Promise<bigint> {
+    const r = await this.primary.readContract({ address: pool, abi: POOL_ABI, functionName: "getReserveData", args: [weth] });
+    return r.currentLiquidityRate;
   }
 
   async balanceOf(address: string): Promise<bigint> {

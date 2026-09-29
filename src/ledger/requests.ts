@@ -11,7 +11,7 @@
  */
 import { verifyMessage, type Hex } from "viem";
 
-export type RequestAction = "transfer" | "swap" | "withdraw" | "add_liquidity";
+export type RequestAction = "transfer" | "swap" | "withdraw" | "add_liquidity" | "earn_start" | "earn_stop";
 
 export interface SignedRequest {
   account: string;

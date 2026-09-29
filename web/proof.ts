@@ -124,7 +124,7 @@ function solvencySection(d: ProofData): string {
       <tbody>${Object.entries(s)
         .map(
           ([a, v]) => `<tr><th scope="row">${esc(ASSET_NAMES[a] ?? a)}</th><td class="num">${fmtEth(v.onChain)}${v.earning && BigInt(v.earning) > 0n ? `<br><span class="note">of which ${fmtEth(v.earning)} supplied to Aave</span>` : ""}</td><td class="num">${fmtEth(v.owed)}</td>
-          <td>${v.ok ? `<span class="tag allow">Covered</span>` : `<span class="tag deny">Short</span>`}</td></tr>`,
+          <td>${v.ok ? `<span class="tag allow">Covered</span>` : `<span class="tag deny">Short by ${fmtEth((BigInt(v.owed) - BigInt(v.onChain)).toString(), 12)} ETH</span>`}</td></tr>`,
         )
         .join("")}</tbody>
     </table>

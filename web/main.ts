@@ -14,8 +14,8 @@ const ASSET_NAMES: Record<Asset, string> = { ETH_SEPOLIA: "Sepolia ETH", ETH_BAS
 const BLOCK_SECONDS: Record<Asset, number> = { ETH_SEPOLIA: 12, ETH_BASE_SEPOLIA: 2 };
 const other = (a: Asset): Asset => (a === "ETH_SEPOLIA" ? "ETH_BASE_SEPOLIA" : "ETH_SEPOLIA");
 
-type Tab = "deposit" | "swap" | "send" | "withdraw" | "liquidity";
-const TAB_NAMES: Record<Tab, string> = { deposit: "Deposit", swap: "Swap", send: "Send", withdraw: "Withdraw", liquidity: "Add liquidity" };
+type Tab = "deposit" | "swap" | "send" | "earn" | "withdraw" | "liquidity";
+const TAB_NAMES: Record<Tab, string> = { deposit: "Deposit", swap: "Swap", send: "Send", earn: "Earn", withdraw: "Withdraw", liquidity: "Add liquidity" };
 
 const state = {
   status: null as Status | null,
@@ -263,14 +263,16 @@ function renderBalances() {
   el.innerHTML = `
     <h2>Balances</h2>
     <table class="bal">
-      <thead><tr><th scope="col">Asset</th><th scope="col">Available</th><th scope="col">Pending</th></tr></thead>
+      <thead><tr><th scope="col">Asset</th><th scope="col">Available</th><th scope="col">Pending</th><th scope="col">Earning on Aave</th></tr></thead>
       <tbody>
         ${state.status.assets
           .map((a) => {
             const b = v.balances[a];
+            const earning = v.earning?.[a];
             return `<tr><th scope="row">${ASSET_NAMES[a]} <span class="muted">on ${esc(chainName(a))}</span></th>
               <td class="num">${fmtEth(b.available)}</td>
-              <td class="num${BigInt(b.pending) > 0n ? " pending" : " muted"}">${fmtEth(b.pending)}</td></tr>`;
+              <td class="num${BigInt(b.pending) > 0n ? " pending" : " muted"}">${fmtEth(b.pending)}</td>
+              <td class="num${earning && BigInt(earning) > 0n ? " earning" : " muted"}">${earning === undefined ? "" : fmtEth(earning, 10)}</td></tr>`;
           })
           .join("")}
       </tbody>
@@ -296,6 +298,12 @@ function renderInflight() {
     rows.push(`<li><span class="tag onchain">On-chain</span>
       <span>Withdrawing ${fmtEth(w.amount)} ${ASSET_NAMES[w.asset]} to <code>${shortAddr(w.destination)}</code>. ${where}</span>
       ${w.link ? `<a href="${esc(w.link)}" target="_blank" rel="noopener">View on explorer</a>` : ""}</li>`);
+  }
+  for (const o of (v.earnOps ?? []).filter((x) => x.status !== "complete" && x.status !== "failed")) {
+    const what = o.kind === "supply" ? `Supplying ${fmtEth(o.amount)} ${ASSET_NAMES[o.asset]} to Aave.` : `Taking ${fmtEth(o.amount)} ${ASSET_NAMES[o.asset]} back from Aave.`;
+    const where = o.status === "pending" ? `Waiting for ${vaultName()} to sign.` : o.status === "approving" ? "Approval sent; the withdrawal from Aave follows." : "Sent. Waiting for confirmations.";
+    rows.push(`<li><span class="tag onchain">On-chain</span><span>${what} ${where}</span>
+      ${o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">View on explorer</a>` : ""}</li>`);
   }
   el.hidden = rows.length === 0;
   el.innerHTML = rows.length ? `<h2>In flight</h2><ul class="inflight">${rows.join("")}</ul>` : "";
@@ -331,6 +339,14 @@ function eventText(e: FeedEvent): string {
       return `Withdrawal of ${withdrawalLabel(d.withdrawalId)} complete. Network fee ${fmtEth(String(d.feeActual), 6)} ETH.`;
     case "withdraw_failed":
       return `Withdrawal of ${withdrawalLabel(d.withdrawalId)} stopped: ${esc(d.error)}. Funds unlocked.`;
+    case "earn_requested":
+      return d.direction === "supply" ? `Start earning with ${amount()} requested. Funds locked.` : `Stop earning ${amount()} requested.`;
+    case "earn_sent":
+      return d.direction === "supply" ? "Aave supply signed and sent" : "Aave withdrawal signed and sent";
+    case "earn_complete":
+      return d.direction === "supply" ? `${amount()} is earning on Aave` : `${amount()} back from Aave. Network fees ${fmtEth(String(d.fee), 6)} ETH.`;
+    case "earn_failed":
+      return `${d.direction === "supply" ? "Aave supply" : "Aave withdrawal"} stopped: ${esc(d.error)}. Everything is back where it was.`;
     default:
       return esc(e.kind);
   }
@@ -377,6 +393,7 @@ function stepMeta(h: HoodEntry, withClock: boolean): string {
   const denied = h.policy && /^(Denied|No policy)/.test(h.policy);
   return `
     ${h.policy ? `<p class="policy ${denied ? "deny" : "allow"}">${esc(h.policy)}</p>` : ""}
+    ${h.call ? `<p class="call">${h.source === "turnkey" && state.status?.mode === "turnkey" ? "Turnkey" : "The vault"} read the call as: ${esc(h.call)}</p>` : ""}
     <p class="meta">
       ${withClock ? `<time>${fmtClock(h.at)}</time>` : ""}
       ${h.ms !== undefined ? `<span>${fmtMs(h.ms)}</span>` : ""}
@@ -425,6 +442,37 @@ function renderLatest() {
 }
 
 // ---------- action panel ----------
+
+/** The Earn tab: pooled Aave supply from the vault, with the rule that makes it safe stated plainly. */
+function earnPanel(): string {
+  const entry = Object.entries(state.status?.earn ?? {})[0] as [Asset, NonNullable<Status["earn"][Asset]>] | undefined;
+  if (!entry) return `<p>Earning is not available here.</p>`;
+  const [asset, e] = entry;
+  const mine = state.view?.earning?.[asset] ?? "0";
+  const cap = e.supplyCap ? fmtEth(e.supplyCap, 2) : "";
+  return `
+    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${vaultName()}'s policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated.</p>
+    <dl class="facts">
+      <div><dt>You are earning on</dt><dd class="num earning" id="earn-mine">${fmtEth(mine, 10)} ${ASSET_NAMES[asset]}</dd></div>
+      <div><dt>Aave's rate now</dt><dd>${e.ratePercent === null ? "Reading…" : `${e.ratePercent.toFixed(2)}% a year (testnet)`}</dd></div>
+      <div><dt>Vault's pooled supply</dt><dd>${fmtEth(e.supplied, 6)} ${ASSET_NAMES[asset]}</dd></div>
+    </dl>
+    <form id="f-earn-start" novalidate>
+      <input type="hidden" name="asset" value="${asset}">
+      <div class="fields"><label>Start earning with <input name="amount" inputmode="decimal" placeholder="0.02" autocomplete="off"></label></div>
+      <p class="hint" data-hint="available"></p>
+      ${cap ? `<p class="note">Up to ${cap} ETH per supply: the vault's per-transaction limit on ${esc(e.network)}.</p>` : ""}
+      <button type="submit" class="primary">Start earning</button>
+      <p class="status" data-status role="status"></p>
+    </form>
+    <form id="f-earn-stop" novalidate>
+      <input type="hidden" name="asset" value="${asset}">
+      <div class="fields"><label>Stop earning <input name="amount" inputmode="decimal" placeholder="0.01" autocomplete="off"></label></div>
+      <div class="row"><button type="submit">Stop earning</button> <button type="button" data-earn-all="${asset}">Stop all</button></div>
+      <p class="note">Taking funds back from Aave can take two signatures the first time: one to let Aave's gateway take back the vault's aWETH, one to withdraw.</p>
+      <p class="status" data-status role="status"></p>
+    </form>`;
+}
 
 function renderPanel() {
   const el = $("#panel");
@@ -475,6 +523,7 @@ function renderPanel() {
         <button type="submit" class="primary">Send</button>
         <p class="status" data-status role="status"></p>
       </form>`,
+    earn: earnPanel(),
     withdraw: `
       <form id="f-withdraw" novalidate>
         <div class="fields">
@@ -521,6 +570,13 @@ function renderHints() {
     const cap = form.querySelector("[data-hint=cap]");
     if (sel && cap) cap.textContent = capText(sel.value as Asset);
   }
+  // The Earn tab's own number ticks with the vault's aWETH, without redrawing the forms.
+  const mine = $("#earn-mine");
+  const earnAsset = Object.keys(state.status?.earn ?? {})[0] as Asset | undefined;
+  if (mine && earnAsset) mine.textContent = `${fmtEth(state.view?.earning?.[earnAsset] ?? "0", 10)} ${ASSET_NAMES[earnAsset]}`;
+  const start = $<HTMLFormElement>("#f-earn-start");
+  const hint = start?.querySelector("[data-hint=available]");
+  if (hint && earnAsset) hint.textContent = `Available: ${fmtEth(available(earnAsset))} ${ASSET_NAMES[earnAsset]}`;
 }
 
 let quoteTimer: number | undefined;
@@ -591,7 +647,7 @@ async function submit(action: RequestAction, params: Record<string, string>, out
   }
 }
 
-const ACTION_TITLES: Record<RequestAction, string> = { transfer: "Send", swap: "Swap", withdraw: "Withdraw", add_liquidity: "Add liquidity" };
+const ACTION_TITLES: Record<RequestAction, string> = { transfer: "Send", swap: "Swap", withdraw: "Withdraw", add_liquidity: "Add liquidity", earn_start: "Start earning", earn_stop: "Stop earning" };
 
 const settled = (res: { settledMs?: number }) => (res.settledMs !== undefined ? ` Settled in ${fmtMs(res.settledMs)}, no blockchain involved.` : "");
 
@@ -650,6 +706,12 @@ async function onSubmit(form: HTMLFormElement) {
       `Withdrawal of ${shown(asset)} requested and funds locked, including a ${fmtEth(String(res.feeReserved), 6)} ETH fee reserve. Follow it under In flight.`,
     );
     if (ok) clearAmount();
+  } else if (form.id === "f-earn-start") {
+    const asset = field("asset") as Asset;
+    if (await submit("earn_start", { asset, amount: amount.toString() }, out, () => `${shown(asset)} locked to supply to Aave. Follow it under In flight.`)) clearAmount();
+  } else if (form.id === "f-earn-stop") {
+    const asset = field("asset") as Asset;
+    if (await submit("earn_stop", { asset, amount: amount.toString() }, out, () => `Taking ${shown(asset)} back from Aave. Follow it under In flight.`)) clearAmount();
   } else if (form.id === "f-liquidity") {
     const asset = field("asset") as Asset;
     if (await submit("add_liquidity", { asset, amount: amount.toString() }, out, (res) => `Added ${shown(asset)} to the pool.${settled(res)}`)) clearAmount();
@@ -730,6 +792,11 @@ root.addEventListener("click", async (ev) => {
       t.textContent = "Copy failed";
     }
     setTimeout(() => (t.textContent = was), 1500);
+    return;
+  }
+  if (t.dataset.earnAll) {
+    const out = $("#f-earn-stop [data-status]");
+    void submit("earn_stop", { asset: t.dataset.earnAll, amount: "all" }, out, () => "Taking everything you have earning back from Aave. Follow it under In flight.");
     return;
   }
   if (t.dataset.check) {

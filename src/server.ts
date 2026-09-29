@@ -11,7 +11,7 @@ import { loadAppKeys, roflAppId } from "./signer/keys.js";
 import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor, withdrawalLimits } from "./chains/config.js";
-import { AAVE_MARKETS } from "./chains/aave.js";
+import { AAVE_MARKETS, supplyRatePercent } from "./chains/aave.js";
 import { loadState } from "./storage/state.js";
 import { UserDirectory, SESSION_SECONDS } from "./auth/google.js";
 import { CHECKS, codeVersion, explorerFor, runCheck, type CheckId } from "./proof.js";
@@ -132,13 +132,20 @@ server.get("/api/status", async () => ({
   liquidityProvider: LIQUIDITY_PROVIDER ?? null,
   pool: app.ledger.state.pool.reserves,
   accounts: Object.keys(app.ledger.state.accounts).length,
+  // Earn: where it runs, Aave's current yearly rate, and the vault's pooled supply (its aWETH, read from the chain).
+  earn: Object.fromEntries(
+    AAVE_MARKETS.map((m) => {
+      const info = app.earnInfo[m.asset];
+      return [m.asset, { network: m.name, ratePercent: info ? supplyRatePercent(info.rate) : null, supplied: (info?.supplied ?? 0n).toString(), at: info?.at ?? null, pool: m.pool, supplyCap: CHAINS.find((c) => c.asset === m.asset)?.withdrawalCap.toString() }];
+    }),
+  ),
 }));
 
 /** Adds display names and an explorer link so the page never has to look either up. */
 function decorate(e: LedgerEvent) {
   const nameOf = (id: unknown) => (typeof id === "string" ? app.ledger.state.accounts[id]?.name : undefined);
   const txHash = typeof e.detail.txHash === "string" ? e.detail.txHash : undefined;
-  const asset = (e.detail.asset ?? app.ledger.state.withdrawals[String(e.detail.withdrawalId)]?.asset) as Asset | undefined;
+  const asset = (e.detail.asset ?? app.ledger.state.withdrawals[String(e.detail.withdrawalId)]?.asset ?? app.ledger.earn.ops[String(e.detail.earnId)]?.asset) as Asset | undefined;
   return { ...e, fromName: nameOf(e.account), toName: nameOf(e.detail.to), link: txHash && asset ? chainFor(asset).explorerTx(txHash) : undefined };
 }
 
@@ -180,7 +187,14 @@ server.get<{ Params: { id: string } }>("/api/accounts/:id", async (req) => {
     .slice(-20)
     .reverse()
     .map((w) => ({ ...w, link: w.txHash ? chainFor(w.asset).explorerTx(w.txHash) : undefined }));
-  return { ...acct, events: app.ledger.eventsFor(acct.id).map(decorate), withdrawals, incoming: app.incomingFor(acct.id) };
+  // What this account's share of the pooled Aave supply is worth now, and its earn operations still in flight.
+  const earning = Object.fromEntries(AAVE_MARKETS.map((m) => [m.asset, app.ledger.earningValue(acct.id, m.asset, app.earnInfo[m.asset]?.supplied ?? 0n).toString()]));
+  const earnOps = Object.values(app.ledger.earn.ops)
+    .filter((o) => o.account === acct.id)
+    .slice(-10)
+    .reverse()
+    .map((o) => ({ ...o, link: o.txHash ? chainFor(o.asset).explorerTx(o.txHash) : undefined }));
+  return { ...acct, earning, earnOps, events: app.ledger.eventsFor(acct.id).map(decorate), withdrawals, incoming: app.incomingFor(acct.id) };
 });
 
 /**

@@ -99,7 +99,8 @@ jobs:
 
       - name: Show the app's log
         if: inputs.mode == 'logs'
-        run: oasis rofl machine logs -y </dev/null 2>&1 | tail -n 200 || true
+        # NEXT PERSON: the raw log is mostly the VM's network noise (podman/veth lines, proxy retries); filtered out here.
+        run: oasis rofl machine logs -y </dev/null 2>&1 | grep -v -E "podman1|veth0|failed to connect to destination" | tail -n 150 || true
 
       - name: Show the machine and its address
         if: always()

@@ -2,7 +2,7 @@
 # just pushed (pinned by digest) and commits it back, so this file always names the version running.
 services:
   crossroads:
-    image: "ghcr.io/wilwixqa1/crossroads-turnkey@sha256:a86a9f2f8710e11aa2b13a0c3c4c5d9d38ba5120c1292fb70ae73c83338f1b2e"
+    image: "ghcr.io/wilwixqa1/crossroads-turnkey@sha256:c6e5136452d430377f3cf39589695c108b2b363313b63e9981d70668ccead8cb"
     platform: linux/amd64
     restart: always
     ports:

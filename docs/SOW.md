@@ -2,7 +2,7 @@
 
 > Snapshot of the living Scope of Work. The editable version is a Claude Doc (link in docs/sessions/T01_CONTEXT.md). Re-export here at each session close-out so the repo copy never drifts far.
 
-Sep 28, 2026 · @Will (Claude Doc rev 86)
+Sep 28, 2026 · @Will (Claude Doc rev 87)
 
 ## Purpose and success criteria
 
@@ -374,7 +374,7 @@ The biggest schedule risk is Solana, and every risk below has a fallback that st
 **Open questions**
 
 - Answered in Phase 1: the parent organization can read the vault but not sign with it (Turnkey refused with an organization mismatch), and the vault has no email or phone, with email recovery disabled.
-- What time is the Bryce call on Sept 30? It sets when to deploy and how many machine hours to buy up front.
+- What time is the Bryce call on Oct 1? It sets when to deploy and how many machine hours to buy up front.
 - Do you want to tell James Austgen or Ari about the demo once it runs? It could be a useful conversation in its own right.
 
 **Will's checklist for Phase 0**

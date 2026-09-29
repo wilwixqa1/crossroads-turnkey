@@ -15,7 +15,7 @@ import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 import { generateP256KeyPair, getPublicKey } from "@turnkey/crypto";
 import { bytesToHex, getAddress, keccak256, parseTransaction, serializeTransaction, type Hex, type TransactionSerializable } from "viem";
 import { VaultError, type Vault, type VaultNote } from "./index.js";
-import { SIGNER_PREFIX, contractInterfaces, evaluate, signerPolicies, type ChainLimit, type PolicySpec } from "./policy.js";
+import { SIGNER_PREFIX, contractInterfaces, evaluate, signerPolicies, turnkeyAbi, type ChainLimit, type PolicySpec } from "./policy.js";
 import type { AaveMarket } from "../chains/aave.js";
 
 export const TURNKEY_API = process.env.TURNKEY_API_BASE_URL ?? "https://api.turnkey.com";
@@ -226,7 +226,7 @@ export class TurnkeyVault implements Vault {
         notes: "Uploaded by the Crossroads app so the vault signer's policies can read these calls.",
         type: "SMART_CONTRACT_INTERFACE_TYPE_ETHEREUM",
         smartContractAddress: w.address,
-        smartContractInterface: JSON.stringify(w.abi),
+        smartContractInterface: turnkeyAbi(w.abi),
       });
       log(`Uploaded the contract interface for ${w.label}`);
     }
@@ -235,7 +235,8 @@ export class TurnkeyVault implements Vault {
   /**
    * Make the signer's policies exactly the ones signerPolicies() describes: create what is missing first, then delete
    * the signer policies that no longer match (an older limit, older wording). Creating first means a failed create
-   * leaves the old rules in force rather than none.
+   * leaves the old rules in force rather than none. Turnkey requires unique policy names, so a rule whose wording
+   * changed under the same name is deleted just before its replacement is created (before the app serves anything).
    */
   private async syncPolicies(log: (line: string) => void) {
     const desired = signerPolicies(this.signerUserId, this.walletId, this.cfg.limits, this.cfg.aave ?? []);
@@ -245,11 +246,19 @@ export class TurnkeyVault implements Vault {
       p.policyName === d.policyName && p.effect === d.effect && squash(p.condition ?? "") === squash(d.condition) && squash(p.consensus ?? "") === squash(d.consensus);
     const signers = policies.filter((p) => p.policyName.startsWith(SIGNER_PREFIX) || (p.consensus ?? "").includes(this.signerUserId));
     const missing = desired.filter((d) => !signers.some((p) => same(p, d)));
-    const stale = signers.filter((p) => !desired.some((d) => same(p, d)));
-    if (missing.length) {
-      await this.admin.createPolicies({ ...this.org, policies: missing });
-      for (const p of missing) log(`Created policy: ${p.policyName}`);
+    let stale = signers.filter((p) => !desired.some((d) => same(p, d)));
+    const renamed = stale.filter((p) => missing.some((d) => d.policyName === p.policyName));
+    const fresh = missing.filter((d) => !renamed.some((p) => p.policyName === d.policyName));
+    if (fresh.length) {
+      await this.admin.createPolicies({ ...this.org, policies: fresh });
+      for (const p of fresh) log(`Created policy: ${p.policyName}`);
     }
+    for (const old of renamed) {
+      await this.admin.deletePolicy({ ...this.org, policyId: old.policyId });
+      await this.admin.createPolicies({ ...this.org, policies: missing.filter((d) => d.policyName === old.policyName) });
+      log(`Updated policy: ${old.policyName}`);
+    }
+    stale = stale.filter((p) => !renamed.includes(p));
     for (const p of stale) {
       await this.admin.deletePolicy({ ...this.org, policyId: p.policyId });
       log(`Removed old policy: ${p.policyName}`);

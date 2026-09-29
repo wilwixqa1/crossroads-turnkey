@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { encodeFunctionData, parseEther, type TransactionSerializable } from "viem";
-import { evaluate, names } from "../src/signer/policy.js";
+import { evaluate, names, turnkeyAbi } from "../src/signer/policy.js";
 import { AAVE_MARKETS, DEBT_TOKEN_ABI, ERC20_ABI, GATEWAY_ABI, POOL_ABI } from "../src/chains/aave.js";
 
 const LIMITS = [
@@ -11,7 +11,7 @@ const M = AAVE_MARKETS[0];
 const VAULT = "0x0beac0e5b61a8db1d211bb638f21dff5af2bcea1";
 const OTHER = "0x9999999999999999999999999999999999999999";
 const plain = (eth: string, chainId = 11155111): TransactionSerializable => ({ chainId, type: "eip1559", to: OTHER, value: parseEther(eth), nonce: 0, gas: 21_000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n });
-const call = (to: `0x${string}`, data: `0x${string}`, value = 0n): TransactionSerializable => ({ chainId: 11155111, type: "eip1559", to, data, value, nonce: 0, gas: 300_000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n });
+const call = (to: `0x${string}`, data: `0x${string}`, value = 0n): TransactionSerializable => ({ chainId: M.chainId, type: "eip1559", to, data, value, nonce: 0, gas: 300_000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n });
 const check = (tx: TransactionSerializable) => evaluate(tx, VAULT, LIMITS, AAVE_MARKETS);
 
 describe("the vault signer's rules, as the stand-in applies them", () => {
@@ -36,16 +36,16 @@ describe("the vault signer's rules, as the stand-in applies them", () => {
 
   it("allows supplying ETH to Aave and withdrawing it, only for the vault address itself", () => {
     const self = encodeFunctionData({ abi: GATEWAY_ABI, functionName: "depositETH", args: [M.pool, VAULT, 0] });
-    expect(check(call(M.gateway, self, parseEther("0.02")))).toMatchObject({ allowed: true, policy: names.aaveSupply });
+    expect(check(call(M.gateway, self, parseEther("0.02")))).toMatchObject({ allowed: true, policy: names.aaveSupply(M) });
     const forSomeoneElse = encodeFunctionData({ abi: GATEWAY_ABI, functionName: "depositETH", args: [M.pool, OTHER, 0] });
     expect(check(call(M.gateway, forSomeoneElse, parseEther("0.02")))).toMatchObject({ allowed: false });
     const back = encodeFunctionData({ abi: GATEWAY_ABI, functionName: "withdrawETH", args: [M.pool, parseEther("0.02"), VAULT] });
-    expect(check(call(M.gateway, back))).toMatchObject({ allowed: true, policy: names.aaveSupply });
+    expect(check(call(M.gateway, back))).toMatchObject({ allowed: true, policy: names.aaveWithdraw(M) });
     const away = encodeFunctionData({ abi: GATEWAY_ABI, functionName: "withdrawETH", args: [M.pool, parseEther("0.02"), OTHER] });
     expect(check(call(M.gateway, away))).toMatchObject({ allowed: false });
     const approveGateway = encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [M.gateway, parseEther("1")] });
-    expect(check(call(M.aWeth, approveGateway))).toMatchObject({ allowed: true, policy: names.aaveApprove });
-    expect(check(call(M.gateway, self, parseEther("0.06")))).toMatchObject({ allowed: false, policy: names.cap(LIMITS[0]) });
+    expect(check(call(M.aWeth, approveGateway))).toMatchObject({ allowed: true, policy: names.aaveApprove(M) });
+    expect(check(call(M.gateway, self, parseEther("0.03")))).toMatchObject({ allowed: false, policy: names.cap(LIMITS[1]) });
   });
 
   it("denies every way to open debt on Aave by the never-borrow rule", () => {
@@ -57,5 +57,12 @@ describe("the vault signer's rules, as the stand-in applies them", () => {
       [M.vDebt, encodeFunctionData({ abi: DEBT_TOKEN_ABI, functionName: "approveDelegation", args: [OTHER, 1n] })],
     ];
     for (const [to, data] of attempts) expect(check(call(to, data))).toMatchObject({ allowed: false, policy: names.neverBorrow });
+  });
+});
+
+describe("contract interfaces for Turnkey", () => {
+  it("gives every parameter a name, since Turnkey rejects an ABI with an unnamed return value", () => {
+    const abi = JSON.parse(turnkeyAbi(ERC20_ABI)) as { outputs: { name?: string }[] }[];
+    for (const f of abi) for (const o of f.outputs) expect(o.name).toBe("");
   });
 });

@@ -8,11 +8,12 @@
  * The rules (Turnkey denies anything no policy allows, and a deny beats any allow):
  *   per network   allow a plain ETH transfer from the vault wallet up to that network's limit
  *                 deny anything worth more than that network's limit
- *   Aave          allow supplying ETH through Aave's gateway, and withdrawing it, only for the vault address itself
+ *   Aave          allow supplying ETH through Aave's gateway only for the vault address itself, and withdrawing it only
+ *                 back to that address
  *                 allow approving the gateway to take back the vault's aWETH (needed to withdraw)
  *                 deny every way to open debt: borrow, flash loans, borrowing through the gateway, credit delegation
  */
-import { decodeFunctionData, formatEther, getAddress, type Abi, type Address, type TransactionSerializable } from "viem";
+import { decodeFunctionData, formatEther, type Abi, type Address, type TransactionSerializable } from "viem";
 import { DEBT_TOKEN_ABI, ERC20_ABI, GATEWAY_ABI, POOL_ABI, type AaveMarket } from "../chains/aave.js";
 
 export interface ChainLimit {
@@ -38,14 +39,15 @@ export const PLAIN_TRANSFER_GAS = 21_000n;
 export const names = {
   withdrawals: (l: ChainLimit) => `${SIGNER_PREFIX} withdrawals on ${l.name}, up to ${formatEther(l.cap)} ETH`,
   cap: (l: ChainLimit) => `${SIGNER_PREFIX} never more than ${formatEther(l.cap)} ETH per withdrawal on ${l.name}`,
-  aaveSupply: `${SIGNER_PREFIX} Aave supply and withdraw only`,
-  aaveApprove: `${SIGNER_PREFIX} let Aave's gateway take back supplied ETH`,
+  aaveSupply: (m: { name: string }) => `${SIGNER_PREFIX} Aave supply, only for the vault itself, on ${m.name}`,
+  aaveWithdraw: (m: { name: string }) => `${SIGNER_PREFIX} Aave withdraw, only back to the vault itself, on ${m.name}`,
+  aaveApprove: (m: { name: string }) => `${SIGNER_PREFIX} let Aave's gateway take back supplied ETH, on ${m.name}`,
   neverBorrow: `${SIGNER_PREFIX} never borrow on Aave`,
 };
 
-/** An address as a policy-language list of its lowercase and checksummed forms, so either spelling matches. */
-function forms(a: Address): string {
-  return `['${a.toLowerCase()}', '${getAddress(a)}']`;
+/** An address in a policy. Turnkey compares addresses regardless of case (tested Sept 28); its docs ask for lowercase. */
+function addr(a: Address): string {
+  return `'${a.toLowerCase()}'`;
 }
 
 export function signerPolicies(signerUserId: string, walletId: string, limits: ChainLimit[], aave: AaveMarket[] = []): PolicySpec[] {
@@ -69,23 +71,33 @@ export function signerPolicies(signerUserId: string, walletId: string, limits: C
       notes: "Circuit breaker: holds even if the app itself asks.",
     });
   }
+  // NEXT PERSON: Turnkey's policy engine does not short-circuit, and reading an argument the call does not have (say
+  // 'spender' on depositETH) makes the whole policy evaluate to an error. An error neither allows nor denies (tested
+  // on a throwaway vault Sept 28: a plain transfer still signed while these three errored). So each allow names one
+  // function and reads only that function's arguments, and the deny reads no arguments: a deny that errors is ignored.
   for (const m of aave) {
     const fn = (name: string) => `eth.tx.function_name == '${name}'`;
     const arg = (name: string) => `eth.tx.contract_call_args['${name}']`;
+    const onMarket = `${mine} && eth.tx.chain_id == ${m.chainId}`;
     out.push({
-      policyName: names.aaveSupply,
+      policyName: names.aaveSupply(m),
       effect: "EFFECT_ALLOW",
       consensus,
-      condition:
-        `${mine} && eth.tx.chain_id == ${m.chainId} && eth.tx.to in ${forms(m.gateway)} && ${arg("pool")} in ${forms(m.pool)} && ` +
-        `((${fn("depositETH")} && ${arg("onBehalfOf")} == eth.tx.from) || (${fn("withdrawETH")} && ${arg("to")} == eth.tx.from && eth.tx.value == 0))`,
-      notes: "Supply ETH to Aave through its gateway, or withdraw it, only for the vault address making the call.",
+      condition: `${onMarket} && eth.tx.to == ${addr(m.gateway)} && ${fn("depositETH")} && ${arg("pool")} == ${addr(m.pool)} && ${arg("onBehalfOf")} == eth.tx.from`,
+      notes: "Supply ETH to Aave through its gateway, only for the vault address making the call.",
     });
     out.push({
-      policyName: names.aaveApprove,
+      policyName: names.aaveWithdraw(m),
       effect: "EFFECT_ALLOW",
       consensus,
-      condition: `${mine} && eth.tx.chain_id == ${m.chainId} && eth.tx.to in ${forms(m.aWeth)} && ${fn("approve")} && ${arg("spender")} in ${forms(m.gateway)} && eth.tx.value == 0`,
+      condition: `${onMarket} && eth.tx.to == ${addr(m.gateway)} && ${fn("withdrawETH")} && ${arg("pool")} == ${addr(m.pool)} && ${arg("to")} == eth.tx.from && eth.tx.value == 0`,
+      notes: "Withdraw supplied ETH from Aave, only back to the vault address making the call.",
+    });
+    out.push({
+      policyName: names.aaveApprove(m),
+      effect: "EFFECT_ALLOW",
+      consensus,
+      condition: `${onMarket} && eth.tx.to == ${addr(m.aWeth)} && ${fn("approve")} && ${arg("spender")} == ${addr(m.gateway)} && eth.tx.value == 0`,
       notes: "Withdrawing through the gateway needs it to take the vault's aWETH back. The gateway is the only spender allowed.",
     });
     out.push({
@@ -93,21 +105,37 @@ export function signerPolicies(signerUserId: string, walletId: string, limits: C
       effect: "EFFECT_DENY",
       consensus,
       condition:
-        `${isTx} && ((eth.tx.to in ${forms(m.pool)} && eth.tx.function_name in ['borrow', 'flashLoan', 'flashLoanSimple']) || ` +
-        `(eth.tx.to in ${forms(m.gateway)} && ${fn("borrowETH")}) || (eth.tx.to in ${forms(m.vDebt)} && ${fn("approveDelegation")}))`,
+        `${isTx} && ((eth.tx.to == ${addr(m.pool)} && eth.tx.function_name in ['borrow', 'flashLoan', 'flashLoanSimple']) || ` +
+        `(eth.tx.to == ${addr(m.gateway)} && ${fn("borrowETH")}) || (eth.tx.to == ${addr(m.vDebt)} && ${fn("approveDelegation")}))`,
       notes: "The vault can never open debt, so pooled funds supplied to Aave can never be liquidated.",
     });
   }
   return out;
 }
 
+/**
+ * An ABI in the form Turnkey accepts. Turnkey rejects ("provided ABI is invalid") any parameter without a name field,
+ * and viem leaves unnamed return values without one, so every parameter gets a name, empty if it had none.
+ */
+export function turnkeyAbi(abi: Abi): string {
+  const named = (params: readonly Record<string, unknown>[] = []): Record<string, unknown>[] =>
+    params.map((p) => ({ ...p, name: p.name ?? "", ...(p.components ? { components: named(p.components as Record<string, unknown>[]) } : {}) }));
+  return JSON.stringify(
+    abi.map((item) => ({
+      ...item,
+      ...("inputs" in item ? { inputs: named(item.inputs as unknown as Record<string, unknown>[]) } : {}),
+      ...("outputs" in item ? { outputs: named(item.outputs as unknown as Record<string, unknown>[]) } : {}),
+    })),
+  );
+}
+
 /** The contracts whose interfaces Turnkey needs, so its policies can read function names and arguments. */
 export function contractInterfaces(aave: AaveMarket[]): { label: string; address: Address; abi: Abi }[] {
   return aave.flatMap((m) => [
-    { label: "Aave v3 Pool (Sepolia)", address: m.pool, abi: POOL_ABI as Abi },
-    { label: "Aave WETH gateway (Sepolia)", address: m.gateway, abi: GATEWAY_ABI as Abi },
-    { label: "Aave aWETH (Sepolia)", address: m.aWeth, abi: ERC20_ABI as Abi },
-    { label: "Aave variable-debt WETH (Sepolia)", address: m.vDebt, abi: DEBT_TOKEN_ABI as Abi },
+    { label: `Aave v3 Pool (${m.name})`, address: m.pool, abi: POOL_ABI as Abi },
+    { label: `Aave WETH gateway (${m.name})`, address: m.gateway, abi: GATEWAY_ABI as Abi },
+    { label: `Aave aWETH (${m.name})`, address: m.aWeth, abi: ERC20_ABI as Abi },
+    { label: `Aave variable-debt WETH (${m.name})`, address: m.vDebt, abi: DEBT_TOKEN_ABI as Abi },
   ]);
 }
 
@@ -161,17 +189,17 @@ export function evaluate(tx: TransactionSerializable, from: string, limits: Chai
     const call = decode(GATEWAY_ABI as Abi, tx.data);
     if (call && same(call.args[0] as string, market.pool)) {
       if (call.functionName === "depositETH" && same(call.args[1] as string, from)) {
-        return { allowed: true, policy: names.aaveSupply, reason: "supplying ETH to Aave for the vault address itself", call: `Aave depositETH, ${formatEther(value)} ETH, on behalf of ${from}` };
+        return { allowed: true, policy: names.aaveSupply(market), reason: "supplying ETH to Aave for the vault address itself", call: `Aave depositETH, ${formatEther(value)} ETH, on behalf of ${from}` };
       }
       if (call.functionName === "withdrawETH" && same(call.args[2] as string, from) && value === 0n) {
-        return { allowed: true, policy: names.aaveSupply, reason: "withdrawing ETH from Aave back to the vault address itself", call: `Aave withdrawETH, ${formatEther(call.args[1] as bigint)} ETH, to ${from}` };
+        return { allowed: true, policy: names.aaveWithdraw(market), reason: "withdrawing ETH from Aave back to the vault address itself", call: `Aave withdrawETH, ${formatEther(call.args[1] as bigint)} ETH, to ${from}` };
       }
     }
   }
   if (market && same(to, market.aWeth)) {
     const call = decode(ERC20_ABI as Abi, tx.data);
     if (call?.functionName === "approve" && same(call.args[0] as string, market.gateway) && value === 0n) {
-      return { allowed: true, policy: names.aaveApprove, reason: "letting Aave's gateway take back the vault's aWETH", call: "aWETH approve, spender: Aave's gateway" };
+      return { allowed: true, policy: names.aaveApprove(market), reason: "letting Aave's gateway take back the vault's aWETH", call: "aWETH approve, spender: Aave's gateway" };
     }
   }
   return { allowed: false, reason: "no policy allows this transaction (only plain transfers and Aave supply and withdraw are allowed)" };

@@ -43,6 +43,7 @@ function fakeTurnkey(seed: { policies?: Policy[] } = {}) {
     getPolicies: async () => ({ policies: org.policies }),
     createPolicies: async (i: { policies: Omit<Policy, "policyId">[] }) => {
       if (org.failPolicies) throw new Error("Turnkey error 3: invalid policy condition");
+      for (const p of i.policies) if (org.policies.some((q) => q.policyName === p.policyName)) throw new Error(`Turnkey error 3: policy label must be unique: ${p.policyName}`);
       const created = i.policies.map((p) => ({ ...p, policyId: `policy-${nextPolicy++}` }));
       org.policies.push(...created);
       return { policyIds: created.map((p) => p.policyId) };
@@ -111,12 +112,17 @@ describe("the signer's policies", () => {
 
   it("allow Aave supply and withdraw only for the vault itself, and deny every way to borrow", () => {
     const ps = signerPolicies("signer-1", "wallet-1", LIMITS, AAVE_MARKETS);
-    const supply = ps.find((p) => p.policyName === names.aaveSupply)!;
+    const supply = ps.find((p) => p.policyName === names.aaveSupply(AAVE_MARKETS[0]))!;
     expect(supply.condition).toContain("eth.tx.contract_call_args['onBehalfOf'] == eth.tx.from");
-    expect(supply.condition).toContain("eth.tx.contract_call_args['to'] == eth.tx.from");
-    expect(supply.condition).toContain("'0x387d311e47e80b498169e6fb51d3193167d89f7d', '0x387d311e47e80b498169e6fb51d3193167d89F7D'");
+    expect(supply.condition).toContain("eth.tx.to == '0x0568130e794429d2eebc4dafe18f25ff1a1ed8b6'");
+    // Turnkey does not short-circuit: a policy reading an argument its call lacks errors, so each reads only its own.
+    expect(supply.condition).not.toContain("['to']");
+    const withdraw = ps.find((p) => p.policyName === names.aaveWithdraw(AAVE_MARKETS[0]))!;
+    expect(withdraw.condition).toContain("eth.tx.contract_call_args['to'] == eth.tx.from");
+    expect(withdraw.condition).not.toContain("onBehalfOf");
     const never = ps.find((p) => p.policyName === names.neverBorrow)!;
     expect(never.effect).toBe("EFFECT_DENY");
+    expect(never.condition).not.toContain("contract_call_args"); // a deny that errors would not apply
     for (const f of ["'borrow'", "'flashLoan'", "'flashLoanSimple'", "'borrowETH'", "'approveDelegation'"]) expect(never.condition).toContain(f);
   });
 });
@@ -125,9 +131,9 @@ describe("the Turnkey vault", () => {
   it("creates its wallet, signer, contract interfaces and policies once, and nothing on later starts", async () => {
     const { org, client } = fakeTurnkey();
     const first = await open(client);
-    expect([org.wallets.length, org.users.length, org.interfaces.length, org.policies.length]).toEqual([1, 1, 4, 7]);
+    expect([org.wallets.length, org.users.length, org.interfaces.length, org.policies.length]).toEqual([1, 1, 4, 8]);
     const again = await open(client);
-    expect([org.wallets.length, org.users.length, org.interfaces.length, org.policies.length]).toEqual([1, 1, 4, 7]);
+    expect([org.wallets.length, org.users.length, org.interfaces.length, org.policies.length]).toEqual([1, 1, 4, 8]);
     expect([again.walletId, again.signerUserId]).toEqual([first.walletId, first.signerUserId]);
   });
 
@@ -145,6 +151,19 @@ describe("the Turnkey vault", () => {
     expect(namesNow).not.toContain("Vault signer: withdrawals on Sepolia and Base Sepolia");
     expect(namesNow).toContain("Vault signer: withdrawals on Base Sepolia, up to 0.02 ETH");
     expect(namesNow).toContain("Someone else's policy");
+    expect(org.policies).toHaveLength(9);
+  });
+
+  it("updates a rule whose wording changed under the same name (Turnkey requires unique names)", async () => {
+    const signer = "approvers.any(user, user.id == 'signer-1')";
+    const same = "Vault signer: let Aave's gateway take back supplied ETH, on Base Sepolia";
+    const { org, client } = fakeTurnkey({ policies: [{ policyId: "old-1", policyName: same, effect: "EFFECT_ALLOW", condition: "an older condition", consensus: signer }] });
+    org.users.push({ userId: "signer-1", userName: "app-signer" });
+    const vault = await open(client);
+    expect(vault.policyProblem).toBeUndefined();
+    const now = org.policies.filter((p) => p.policyName === same);
+    expect(now).toHaveLength(1);
+    expect(now[0].condition).not.toBe("an older condition");
     expect(org.policies).toHaveLength(8);
   });
 

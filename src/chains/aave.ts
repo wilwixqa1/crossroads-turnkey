@@ -1,12 +1,13 @@
 /**
- * Aave v3 on Sepolia: where the vault can earn on pooled funds (Earn tab).
+ * Aave v3 on Base Sepolia: where the vault earns on pooled funds (Earn tab).
  *
  * The vault supplies native ETH through Aave's WETH gateway (one call, one signature) and takes it back the same way
  * (approve the gateway to take the aWETH back, then withdraw). It never borrows: the vault signer's Turnkey policies
  * allow only these calls, on the vault's own behalf, and explicitly deny every way to open debt.
  *
- * Addresses from Aave's official address book (github.com/bgd-labs/aave-address-book, AaveV3Sepolia.sol), checked
- * Sept 28, 2026.
+ * Base Sepolia, not Sepolia: on Sept 28, 2026 Aave's Sepolia WETH market paid 0% (nobody borrowing), Base Sepolia's
+ * about 2.3% a year, so only there does an Earning balance visibly grow.
+ * Addresses from Aave's official address book (github.com/bgd-labs/aave-address-book, AaveV3BaseSepolia.sol).
  */
 import { parseAbi, type Address } from "viem";
 import type { Asset } from "../ledger/ledger.js";
@@ -14,6 +15,8 @@ import type { Asset } from "../ledger/ledger.js";
 export interface AaveMarket {
   asset: Asset;
   chainId: number;
+  /** Network name, for policy names and labels. */
+  name: string;
   /** The Pool: holds supplied funds and is where borrowing would happen. */
   pool: Address;
   /** WrappedTokenGatewayV3: supplies and withdraws native ETH in one call. */
@@ -27,13 +30,14 @@ export interface AaveMarket {
 
 export const AAVE_MARKETS: AaveMarket[] = [
   {
-    asset: "ETH_SEPOLIA",
-    chainId: 11155111,
-    pool: "0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951",
-    gateway: "0x387d311e47e80b498169e6fb51d3193167d89F7D",
-    weth: "0xC558DBdd856501FCd9aaF1E62eae57A9F0629a3c",
-    aWeth: "0x5b071b590a59395fE4025A0Ccc1FcC931AAc1830",
-    vDebt: "0x22a35DB253f4F6D0029025D6312A3BdAb20C2c6A",
+    asset: "ETH_BASE_SEPOLIA",
+    chainId: 84532,
+    name: "Base Sepolia",
+    pool: "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27",
+    gateway: "0x0568130e794429D2eEBC4dafE18f25Ff1a1ed8b6",
+    weth: "0x4200000000000000000000000000000000000006",
+    aWeth: "0x73a5bB60b0B0fc35710DDc0ea9c407031E31Bdbb",
+    vDebt: "0x562abf6562d6A2b165aDa02b5946bc3E7b4dD653",
   },
 ];
 
@@ -69,7 +73,7 @@ export const ERC20_ABI = parseAbi([
 
 export const DEBT_TOKEN_ABI = parseAbi(["function approveDelegation(address delegatee, uint256 amount)", "function balanceOf(address owner) view returns (uint256)"]);
 
-/** Aave quotes rates in ray (1e27) per year, compounded per second. This is the simple yearly rate as a percentage. */
-export function supplyApyPercent(currentLiquidityRate: bigint): number {
+/** Aave quotes its supply rate as a yearly rate in ray (1e27). This is that rate as a percentage, two decimals. */
+export function supplyRatePercent(currentLiquidityRate: bigint): number {
   return Number((currentLiquidityRate * 10_000n) / 10n ** 27n) / 100;
 }

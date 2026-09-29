@@ -57,3 +57,29 @@ export function spotRate(reserveIn: string | bigint, reserveOut: string | bigint
   if (rIn === 0n || rOut === 0n) return null;
   return (rOut * WEI) / rIn;
 }
+
+/** A token amount in its smallest units (e.g. USDC's 6 decimals) with `shown` decimals, rounded toward zero. */
+export function fmtUnits(value: string | bigint, decimals: number, shown = 2): string {
+  const v = typeof value === "bigint" ? value : BigInt(value);
+  const one = 10n ** BigInt(decimals);
+  const whole = v / one;
+  const frac = ((v % one) * 10n ** BigInt(shown)) / one;
+  return shown > 0 ? `${whole}.${frac.toString().padStart(shown, "0")}` : whole.toString();
+}
+
+/** US dollars from Aave's figures (8 decimals), as "$53.63". */
+export function fmtUsd(base8: string | bigint): string {
+  return `$${fmtUnits(base8, 8, 2)}`;
+}
+
+/** What a person typed to a token's smallest units. Throws a message fit to show on screen. */
+export function parseUnitsInput(text: string, decimals: number, example = "10"): bigint {
+  const s = text.trim();
+  const m = /^(\d*)(?:\.(\d*))?$/.exec(s);
+  if (!s || !m || (!m[1] && !m[2])) throw new Error(`Enter an amount, like ${example}`);
+  const frac = m[2] ?? "";
+  if (frac.length > decimals) throw new Error(`Use at most ${decimals} decimal places`);
+  const units = BigInt(m[1] || "0") * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0");
+  if (units === 0n) throw new Error("Enter an amount above zero");
+  return units;
+}

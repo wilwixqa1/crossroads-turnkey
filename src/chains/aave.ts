@@ -26,6 +26,12 @@ export interface AaveMarket {
   aWeth: Address;
   /** Variable-debt WETH: approving delegation on it would let someone else borrow against the vault's supply. */
   vDebt: Address;
+  /** Aave's price oracle for this market (US dollars, 8 decimals). */
+  oracle: Address;
+  /** What the Earn tab's borrow attempt asks for. The vault's policy refuses every borrow; this only shows it. */
+  borrowAsset: { symbol: string; address: Address; decimals: number };
+  /** This market's name on Aave's own site (app.aave.com), for links to Aave's pages for its assets. */
+  aaveAppMarket: string;
 }
 
 export const AAVE_MARKETS: AaveMarket[] = [
@@ -38,6 +44,9 @@ export const AAVE_MARKETS: AaveMarket[] = [
     weth: "0x4200000000000000000000000000000000000006",
     aWeth: "0x73a5bB60b0B0fc35710DDc0ea9c407031E31Bdbb",
     vDebt: "0x562abf6562d6A2b165aDa02b5946bc3E7b4dD653",
+    oracle: "0x943b0dE18d4abf4eF02A85912F8fc07684C141dF",
+    borrowAsset: { symbol: "USDC", address: "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f", decimals: 6 },
+    aaveAppMarket: "proto_base_sepolia_v3",
   },
 ];
 
@@ -71,9 +80,15 @@ export const ERC20_ABI = parseAbi([
   "function balanceOf(address owner) view returns (uint256)",
 ]);
 
+export const ORACLE_ABI = parseAbi(["function getAssetPrice(address asset) view returns (uint256)"]);
+
 export const DEBT_TOKEN_ABI = parseAbi(["function approveDelegation(address delegatee, uint256 amount)", "function balanceOf(address owner) view returns (uint256)"]);
 
-/** Aave quotes its supply rate as a yearly rate in ray (1e27). This is that rate as a percentage, two decimals. */
-export function supplyRatePercent(currentLiquidityRate: bigint): number {
-  return Number((currentLiquidityRate * 10_000n) / 10n ** 27n) / 100;
+/**
+ * Aave stores its rates as simple yearly rates in ray (1e27) and compounds them every second. Aave's own site shows
+ * the compounded yearly figure (APY), so this does too, to two decimals: 1.23% stored shows as 1.24%, as on Aave.
+ */
+export function aaveApyPercent(rateRay: bigint): number {
+  const apr = Number((rateRay * 1_000_000n) / 10n ** 27n) / 1_000_000;
+  return Math.round(Math.expm1(apr) * 10_000) / 100;
 }

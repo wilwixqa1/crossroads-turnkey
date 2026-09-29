@@ -11,10 +11,11 @@ import { loadAppKeys, roflAppId } from "./signer/keys.js";
 import { LedgerError, ASSETS, type Asset, type LedgerEvent } from "./ledger/ledger.js";
 import { requestMessage, type SignedRequest } from "./ledger/requests.js";
 import { CHAINS, chainFor, withdrawalLimits } from "./chains/config.js";
-import { AAVE_MARKETS, supplyRatePercent } from "./chains/aave.js";
+import { AAVE_MARKETS, aaveApyPercent } from "./chains/aave.js";
 import { loadState } from "./storage/state.js";
 import { UserDirectory, SESSION_SECONDS } from "./auth/google.js";
 import { CHECKS, codeVersion, explorerFor, runCheck, type CheckId } from "./proof.js";
+import { readBorrowMarket, tryBorrow } from "./borrow.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const STATE_PATH = process.env.STATE_PATH ?? join(process.cwd(), "data", "state.json");
@@ -136,7 +137,7 @@ server.get("/api/status", async () => ({
   earn: Object.fromEntries(
     AAVE_MARKETS.map((m) => {
       const info = app.earnInfo[m.asset];
-      return [m.asset, { network: m.name, ratePercent: info ? supplyRatePercent(info.rate) : null, supplied: (info?.supplied ?? 0n).toString(), at: info?.at ?? null, pool: m.pool, supplyCap: CHAINS.find((c) => c.asset === m.asset)?.withdrawalCap.toString() }];
+      return [m.asset, { network: m.name, ratePercent: info ? aaveApyPercent(info.rate) : null, supplied: (info?.supplied ?? 0n).toString(), at: info?.at ?? null, pool: m.pool, supplyCap: CHAINS.find((c) => c.asset === m.asset)?.withdrawalCap.toString() }];
     }),
   ),
 }));
@@ -281,6 +282,17 @@ server.post<{ Params: { id: string } }>("/api/proof/checks/:id", async (req) => 
   const id = req.params.id as CheckId;
   if (!CHECKS.some((c) => c.id === id)) throw new LedgerError("Unknown check", "BAD_CHECK");
   return runCheck(id, app, directory);
+});
+
+/** The Earn tab's borrow panel: Aave's live figures for each vault address with ETH supplied. */
+server.get("/api/borrow", async () => readBorrowMarket(app));
+
+/** Try a borrow against a vault address: Aave is asked first (simulated), then the vault. Never broadcast. */
+server.post<{ Body: { address: string; amount: string } }>("/api/borrow/try", async (req) => {
+  const { address, amount } = req.body ?? {};
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? "")) throw new LedgerError("Choose a vault address", "BAD_ADDRESS");
+  if (!/^[0-9]{1,30}$/.test(amount ?? "")) throw new LedgerError("Enter an amount to borrow", "BAD_AMOUNT");
+  return tryBorrow(app, address, BigInt(amount));
 });
 
 server.listen({ port: PORT, host: "0.0.0.0" }).then(() => {

@@ -4,10 +4,10 @@
  * never interrupted.
  */
 import { requestMessage, type RequestAction } from "../src/ledger/requests.js";
-import { api, ApiError, type AccountView, type Asset, type FeedEvent, type HoodEntry, type Status } from "./api.js";
+import { api, ApiError, type AccountView, type Asset, type BorrowAttempt, type BorrowMarket, type FeedEvent, type HoodEntry, type Status } from "./api.js";
 import { standIn, type RequestSigner, type StandInAccount } from "./signer.js";
 import { googleSession, renderGoogleButton, SessionExpired, turnkeySigner } from "./google.js";
-import { fmtClock, fmtEth, fmtMs, isAddress, parseEthInput, shortAddr, shortId, spotRate } from "./format.js";
+import { fmtClock, fmtEth, fmtMs, fmtUnits, fmtUsd, isAddress, parseEthInput, parseUnitsInput, shortAddr, shortId, spotRate } from "./format.js";
 import { renderProof, runProofCheck } from "./proof.js";
 
 const ASSET_NAMES: Record<Asset, string> = { ETH_SEPOLIA: "Sepolia ETH", ETH_BASE_SEPOLIA: "Base ETH" };
@@ -28,6 +28,10 @@ const state = {
   rendered: { feed: "", hood: "", latest: "" },
   /** The action the "What just happened" card follows, and its title. */
   latest: null as { ref: string; title: string } | null,
+  /** Aave's view of the vault for the Earn tab's borrow panel, read when that tab is open. */
+  borrow: null as BorrowMarket | null,
+  borrowError: "",
+  borrowReadAt: 0,
 };
 
 const root = document.getElementById("root")!;
@@ -453,7 +457,7 @@ function earnPanel(): string {
   const mine = state.view?.earning?.[asset] ?? "0";
   const cap = e.supplyCap ? fmtEth(e.supplyCap, 2) : "";
   return `
-    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${state.status?.mode === "turnkey" ? "Turnkey's" : "The vault's"} policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated. <a href="/proof" target="_blank" rel="noopener">See a borrow refused on the proof page</a>.</p>
+    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${state.status?.mode === "turnkey" ? "Turnkey's" : "The vault's"} policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated. <a href="#borrow">Try a borrow below</a>.</p>
     <dl class="facts">
       <div><dt>You are earning on</dt><dd class="num earning" id="earn-mine">${fmtEth(mine, 10)} ${ASSET_NAMES[asset]}</dd></div>
       <div><dt>Aave's rate now</dt><dd id="earn-rate">${earnRateText(e)}</dd></div>
@@ -473,7 +477,150 @@ function earnPanel(): string {
       <div class="row"><button type="submit">Stop earning</button> <button type="button" data-earn-all="${asset}">Stop all</button></div>
       <p class="note">Taking funds back from Aave can take two signatures the first time: one to let Aave's gateway take back the vault's aWETH, one to withdraw.</p>
       <p class="status" data-status role="status"></p>
-    </form>`;
+    </form>
+    ${borrowSection()}`;
+}
+
+// ---------- borrow against the vault (always refused) ----------
+
+/** The borrow panel's frame. Its figures fill in from Aave (renderBorrow) without redrawing the form. */
+function borrowSection(): string {
+  const vault = vaultName();
+  return `
+    <section class="borrow" id="borrow" aria-labelledby="borrow-h">
+      <h3 id="borrow-h">Borrow against the vault</h3>
+      <p>Aave counts the vault's supplied ETH as collateral and would lend against it. ${esc(vault.charAt(0).toUpperCase() + vault.slice(1))}'s policy refuses every borrow, so the pooled funds can never be liquidated. Try it: Aave is asked first, then ${esc(vault)}. Nothing is ever sent.</p>
+      <div id="borrow-position" aria-live="polite"><p class="note">Reading the vault's position from Aave…</p></div>
+      <form id="f-borrow" novalidate>
+        <div class="fields">
+          <label data-borrow-address-field hidden>Vault address <select name="address" data-borrow-address></select></label>
+          <label>Amount <span class="unit-field"><input name="amount" inputmode="decimal" placeholder="10" autocomplete="off"><span class="unit" data-borrow-unit>USDC</span></span></label>
+        </div>
+        <div class="row"><button type="submit" class="primary" data-borrow-submit>Borrow</button> <button type="button" data-borrow-max>Max</button></div>
+        <p class="status" data-status role="status"></p>
+      </form>
+      <ol class="steps borrow-steps" id="borrow-steps" hidden></ol>
+      <p class="note" id="borrow-aave"></p>
+    </section>`;
+}
+
+/** Borrow and Max work only when a vault address has something supplied to Aave. */
+function syncBorrowButtons() {
+  const has = !!selectedBorrowPosition();
+  const button = $<HTMLButtonElement>("[data-borrow-submit]");
+  const max = $<HTMLButtonElement>("[data-borrow-max]");
+  if (button) button.disabled = state.busy || !has;
+  if (max) max.disabled = !has;
+}
+
+function selectedBorrowPosition() {
+  const b = state.borrow;
+  if (!b?.positions.length) return undefined;
+  const chosen = $<HTMLSelectElement>("[data-borrow-address]")?.value;
+  return b.positions.find((p) => p.address === chosen) ?? b.positions[0];
+}
+
+/** Aave's figures for the chosen vault address. Keeps the chosen address and whatever is typed in Amount. */
+function renderBorrow() {
+  const out = $("#borrow-position");
+  const select = $<HTMLSelectElement>("[data-borrow-address]");
+  if (!out || !select) return;
+  const b = state.borrow;
+  syncBorrowButtons();
+  if (!b) {
+    out.innerHTML = state.borrowError ? `<p class="status err">Could not read Aave: ${esc(state.borrowError)}</p>` : `<p class="note">Reading the vault's position from Aave…</p>`;
+    return;
+  }
+  const unit = $("[data-borrow-unit]");
+  if (unit) unit.textContent = b.asset.symbol;
+  const key = b.positions.map((p) => p.address).join(",");
+  if (select.dataset.key !== key) {
+    const was = select.value;
+    select.innerHTML = b.positions.map((p) => `<option value="${esc(p.address)}">${esc(shortAddr(p.address))}</option>`).join("");
+    if (b.positions.some((p) => p.address === was)) select.value = was;
+    select.dataset.key = key;
+  }
+  // One vault address with collateral is the usual case: the figures below name it, so the picker only appears for two or more.
+  const field = $<HTMLElement>("[data-borrow-address-field]");
+  if (field) field.hidden = b.positions.length < 2;
+  syncBorrowButtons();
+  const aaveNote = $("#borrow-aave");
+  if (aaveNote)
+    aaveNote.innerHTML = `Aave's own pages show the same terms: <a href="${esc(b.aaveLinks.collateral)}" target="_blank" rel="noopener">ETH as collateral</a> (its lending limit) and <a href="${esc(b.aaveLinks.borrow)}" target="_blank" rel="noopener">${esc(b.asset.symbol)} borrowing</a> (its rate). They need Testnet mode on, in Aave's settings.`;
+  const p = selectedBorrowPosition();
+  if (!p) {
+    out.innerHTML = `<p class="note">Nothing is supplied to Aave right now, so Aave would lend the vault nothing. Start earning above, then try a borrow.</p>`;
+    return;
+  }
+  const debt = BigInt(p.debtUsd);
+  out.innerHTML = `
+    <dl class="facts">
+      <div><dt>Vault address</dt><dd><code>${esc(p.address)}</code></dd></div>
+      <div><dt>Supplied to Aave</dt><dd>${fmtEth(p.supplied, 6)} ETH, worth ${fmtUsd(p.collateralUsd)} at Aave's price</dd></div>
+      <div><dt>Aave would lend up to</dt><dd><strong class="lend">${fmtUnits(p.maxBorrow, b.asset.decimals)} ${esc(b.asset.symbol)}</strong>, ${p.ltvPercent}% of that value</dd></div>
+      <div><dt>Borrow rate</dt><dd>${b.ratePercent.toFixed(2)}% a year, variable (testnet)</dd></div>
+      <div><dt>Debt</dt><dd>${debt === 0n ? "None" : `${fmtUsd(p.debtUsd)}${p.healthFactor ? `, health factor ${fmtUnits(p.healthFactor, 18)}` : ""}`}</dd></div>
+    </dl>`;
+}
+
+async function loadBorrow() {
+  state.borrowReadAt = Date.now();
+  try {
+    state.borrow = await api.borrow();
+    state.borrowError = "";
+  } catch (err) {
+    state.borrowError = (err as Error).message;
+  }
+  renderBorrow();
+}
+
+/** Aave's answer, then the vault's, as numbered steps under the form. */
+function renderBorrowSteps(r: BorrowAttempt) {
+  const el = $<HTMLOListElement>("#borrow-steps");
+  if (!el) return;
+  const aave = `<li class="src-chain"><span class="src">Aave · ${esc(state.borrow?.network ?? "")}</span><p>${esc(r.aave.message)}</p><p class="meta"><span>${fmtMs(r.aave.ms)}</span></p></li>`;
+  const v = r.vault;
+  const key = v?.by === "Turnkey" ? "Turnkey · vault signer" : "Stand-in vault";
+  const asked = v
+    ? `<li class="src-turnkey"><span class="src">${esc(key)}</span><p>The vault's signer asked ${esc(v.by)} to sign that same transaction.</p><p class="call">The call: ${esc(v.call)}</p></li>`
+    : "";
+  const answer = v
+    ? `<li class="src-turnkey ${v.outcome === "refused" ? "refused" : "unexpected"}"><span class="src">${esc(v.by)}</span><p>${esc(v.message)}</p>
+        ${v.policy ? `<p class="policy ${v.outcome === "refused" ? "deny" : "allow"}">${esc(v.policy)}</p>` : ""}
+        <p class="meta"><span>${fmtMs(v.ms)}</span>${v.activityId ? `<button type="button" class="link act" data-copy="${esc(v.activityId)}" title="Turnkey activity ${esc(v.activityId)}. Click to copy.">Activity ${esc(shortId(v.activityId))}</button>` : ""}</p></li>`
+    : "";
+  el.innerHTML = aave + asked + answer;
+  el.hidden = false;
+}
+
+async function onBorrow(form: HTMLFormElement) {
+  const out = form.querySelector("[data-status]");
+  const b = state.borrow;
+  const p = selectedBorrowPosition();
+  if (!b || !p) return say(out, "Nothing is supplied to Aave yet. Start earning first.", "err");
+  let amount: bigint;
+  try {
+    amount = parseUnitsInput((form.elements.namedItem("amount") as HTMLInputElement).value, b.asset.decimals);
+  } catch (err) {
+    return say(out, (err as Error).message, "err");
+  }
+  if (state.busy) return;
+  setBusy(true);
+  say(out, `Asking Aave, then ${vaultName()}…`);
+  try {
+    const r = await api.tryBorrow(p.address, amount);
+    renderBorrowSteps(r);
+    const shown = `${fmtUnits(amount, b.asset.decimals)} ${b.asset.symbol}`;
+    if (!r.aave.ok) say(out, `Aave itself would not lend ${shown}, so this shows nothing about ${vaultName()}. Try a smaller amount.`, "err");
+    else if (r.vault?.outcome === "refused") say(out, `Aave would lend ${shown}. ${r.vault.by} refused to sign the borrow.`, "ok");
+    else if (r.vault?.outcome === "allowed") say(out, `${r.vault.by} signed a borrow. This should never happen. Nothing was sent.`, "err");
+    else say(out, r.vault?.message ?? "The attempt could not finish.", "err");
+  } catch (err) {
+    say(out, (err as Error).message, "err");
+  } finally {
+    setBusy(false);
+    renderBorrow();
+  }
 }
 
 function renderPanel() {
@@ -554,6 +701,10 @@ function renderPanel() {
   el.innerHTML = panels[state.tab];
   for (const b of root.querySelectorAll<HTMLButtonElement>("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === state.tab));
   renderHints();
+  if (state.tab === "earn") {
+    renderBorrow();
+    void loadBorrow();
+  }
 }
 
 /** Each network's per-withdrawal limit, as the vault's policy sets it. */
@@ -621,6 +772,7 @@ function say(el: Element | null, text: string, tone: "ok" | "err" | "" = "") {
 function setBusy(busy: boolean) {
   state.busy = busy;
   for (const b of root.querySelectorAll<HTMLButtonElement>("#panel button.primary")) b.disabled = busy;
+  syncBorrowButtons();
   renderHints();
 }
 
@@ -777,6 +929,7 @@ async function refresh() {
     renderHood();
     renderLatest();
     renderHints();
+    if (state.tab === "earn" && Date.now() - state.borrowReadAt > 15_000) void loadBorrow();
   } catch (err) {
     if (err instanceof ApiError && err.code === "NO_ACCOUNT") return renderLogin("This account is not on the app any more. Choose it again to register it.");
     const offline = $("#offline");
@@ -804,6 +957,12 @@ root.addEventListener("click", async (ev) => {
   if (t.dataset.earnAll) {
     const out = $("#f-earn-stop [data-status]");
     void submit("earn_stop", { asset: t.dataset.earnAll, amount: "all" }, out, () => "Taking everything you have earning back from Aave. Follow it under In flight.");
+    return;
+  }
+  if (t.dataset.borrowMax !== undefined) {
+    const p = selectedBorrowPosition();
+    const input = $<HTMLInputElement>("#f-borrow input[name=amount]");
+    if (p && input && state.borrow) input.value = fmtUnits(p.maxBorrow, state.borrow.asset.decimals);
     return;
   }
   if (t.dataset.check) {
@@ -845,6 +1004,7 @@ root.addEventListener("submit", (ev) => {
     createAccount(name).catch((err) => renderLogin((err as Error).message));
     return;
   }
+  if (form.id === "f-borrow") return void onBorrow(form);
   void onSubmit(form);
 });
 
@@ -856,6 +1016,7 @@ root.addEventListener("input", (ev) => {
 });
 root.addEventListener("change", (ev) => {
   if ((ev.target as Element).closest("#f-swap")) scheduleQuote();
+  if ((ev.target as Element).matches("[data-borrow-address]")) renderBorrow();
   renderHints();
 });
 

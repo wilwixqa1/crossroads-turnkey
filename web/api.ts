@@ -111,6 +111,39 @@ export interface HoodEntry {
   source: "turnkey" | "wallet" | "chain" | "ledger";
 }
 
+/** Aave's live view of the vault for the Earn tab's borrow panel (mirrors BorrowMarket in src/borrow.ts). */
+export interface BorrowPosition {
+  address: string;
+  supplied: string;
+  collateralUsd: string;
+  debtUsd: string;
+  availableUsd: string;
+  ltvPercent: number;
+  healthFactor: string | null;
+  maxBorrow: string;
+}
+
+export interface BorrowMarket {
+  network: string;
+  chainId: number;
+  pool: string;
+  asset: { symbol: string; address: string; decimals: number };
+  ratePercent: number;
+  ethPriceUsd: string;
+  assetPriceUsd: string;
+  positions: BorrowPosition[];
+  aaveLinks: { collateral: string; borrow: string };
+  at: number;
+}
+
+/** One borrow attempt: Aave's answer, then the vault's (mirrors BorrowAttempt in src/borrow.ts). */
+export interface BorrowAttempt {
+  address: string;
+  amount: string;
+  aave: { ok: boolean; message: string; ms: number };
+  vault?: { outcome: "refused" | "allowed" | "error"; by: "Turnkey" | "Stand-in vault"; call: string; message: string; policy?: string; activityId?: string; ms: number };
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly code: string) {
     super(message);
@@ -135,5 +168,7 @@ export const api = {
   hood: (id: string) => call<HoodEntry[]>(`/api/hood?account=${encodeURIComponent(id)}`),
   quote: (assetIn: Asset, assetOut: Asset, amount: bigint) =>
     call<{ amountOut: string }>(`/api/quote?assetIn=${assetIn}&assetOut=${assetOut}&amount=${amount}`),
+  borrow: () => call<BorrowMarket>("/api/borrow"),
+  tryBorrow: (address: string, amount: bigint) => call<BorrowAttempt>("/api/borrow/try", { method: "POST", body: JSON.stringify({ address, amount: amount.toString() }) }),
   request: (req: SignedRequest & { trace?: { activityId?: string; signMs?: number } }) => call<Record<string, unknown> & { settledMs?: number }>("/api/requests", { method: "POST", body: JSON.stringify(req) }),
 };

@@ -41,9 +41,9 @@ export const CHECKS: { id: CheckId; title: string; what: string }[] = [
 ];
 
 /** A transaction number no vault address will ever reach, so even an unexpected signature could never land on-chain. */
-const NEVER_NONCE = 999_999_999;
+export const NEVER_NONCE = 999_999_999;
 
-function probeTx(chainId: number, to: Hex, value: bigint, data?: Hex, gas = 21_000n): TransactionSerializable {
+export function probeTx(chainId: number, to: Hex, value: bigint, data?: Hex, gas = 21_000n): TransactionSerializable {
   return { chainId, type: "eip1559", to, value, data, nonce: NEVER_NONCE, gas, maxFeePerGas: 10n ** 9n, maxPriorityFeePerGas: 10n ** 9n };
 }
 

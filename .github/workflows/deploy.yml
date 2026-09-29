@@ -4,13 +4,14 @@ name: deploy
 #   deploy: build the image, register the ROFL app if needed, publish the new version, run it on the machine.
 #   top-up: only add machine hours (keeps the same machine, URL and saved ledger).
 #   status: show the machine and the app, spend nothing.
+#   logs: show the app's recent log from the machine (admin only, free). The app logs no secrets.
 on:
   workflow_dispatch:
     inputs:
       mode:
         description: What to do
         type: choice
-        options: [deploy, top-up, status]
+        options: [deploy, top-up, status, logs]
         default: deploy
       hours:
         description: Machine hours to pay for (first rental or top-up; 5 TEST each on the Oasis-run testnet provider)
@@ -95,6 +96,10 @@ jobs:
       - name: Add machine hours
         if: inputs.mode == 'top-up'
         run: oasis rofl machine top-up --account deployer --term hour --term-count "${{ inputs.hours }}" -y </dev/null
+
+      - name: Show the app's log
+        if: inputs.mode == 'logs'
+        run: oasis rofl machine logs -y </dev/null 2>&1 | tail -n 200 || true
 
       - name: Show the machine and its address
         if: always()

@@ -453,7 +453,7 @@ function earnPanel(): string {
   const mine = state.view?.earning?.[asset] ?? "0";
   const cap = e.supplyCap ? fmtEth(e.supplyCap, 2) : "";
   return `
-    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${state.status?.mode === "turnkey" ? "Turnkey's" : "The vault's"} policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated.</p>
+    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${state.status?.mode === "turnkey" ? "Turnkey's" : "The vault's"} policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated. <a href="/proof" target="_blank" rel="noopener">See a borrow refused on the proof page</a>.</p>
     <dl class="facts">
       <div><dt>You are earning on</dt><dd class="num earning" id="earn-mine">${fmtEth(mine, 10)} ${ASSET_NAMES[asset]}</dd></div>
       <div><dt>Aave's rate now</dt><dd id="earn-rate">${earnRateText(e)}</dd></div>

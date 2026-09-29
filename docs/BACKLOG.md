@@ -4,37 +4,17 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 
 ## Next up
 
-- [ ] The machine lapsed on Sept 26 and was removed (the app registration, enclave keys and vault all survive; the ledger and the web address did not). Build and test on local chains first, then deploy once, a day before the call, and keep that machine topped up through it: the next deploy rents a new machine with a new address that Will must add to the Google client's Authorized JavaScript origins.
-- [ ] Restore William Wendt's 0.1 Sepolia ETH after the new machine starts: re-link his account (0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec) to his old deposit address, vault address #0 (0x0BeAc0e5b61A8DB1d211BB638f21dFf5AF2bCEA1), then credit deposit tx 0x3024491c812a8b20c1268a16c75bb307a85ea685e7b0c51234eac9c293b1a53b by its transaction. wil wix had vault address #1 (0x0D7Bb399D1FF2138Bc023934b8F462d823CcF0dC), empty. Without this, a fresh sign-up gets a new address and the 0.1 sits unassigned in the vault.
-- [ ] Finish the first live run (Will, on the ROFL address; the 0.07 refusal is done and found in the vault's Activities):
-  1. sign in as wil wix once (that account is not in the fresh ledger yet);
-  2. as William Wendt, send wil wix 0.01;
-  3. withdraw 0.01 Sepolia ETH to MetaMask. A successful vault-signed withdrawal has not run on a real network yet; watch it end to end.
-- [ ] Expired sign-in handling: the Google session key expires after 8 hours, but a tab left open keeps using it and shows a raw "Turnkey error 16: expired api key". Check the session's expiry before signing and on API_KEY_EXPIRED, clear the saved session and return to Continue with Google with a plain message. Also consider a longer session for demo day.
-- [ ] Send to a non-account: check the recipient is a Crossroads account before asking Turnkey to sign (today the wallet signs first, spending a signature, then the app says "Unknown account"). Plain message: "That address isn't a Crossroads account. To send to your own wallet, use Withdraw."
-- [ ] Activity IDs on the page: show them the way Turnkey's dashboard does (first 4 and last 4 characters, e.g. 01a0····e198). Turnkey's IDs start with a timestamp, so two activities in the same second share their first 8 characters and today's labels look identical.
-- [ ] Recipients people can actually find: let Send accept a Crossroads deposit address (credit its owner on the ledger, as Coinbase does between its own users) and, if Will wants it, an email address. Show "Sending to <name>" before confirming.
-- [ ] Per-network withdrawal limits (decided): 0.05 ETH on Sepolia, 0.02 ETH on Base Sepolia. One limit per network in settings; the Withdraw form shows the selected network's limit; on start the app (vault admin, not locked) replaces the vault's limit policies with per-network ones. No Will key needed. Update the policy-name text the page shows.
-- [ ] Proof page (Phase 5), linked from the header:
-  - code version: ROFL app ID, enclave identity and image digest from the committed manifest, explorer link;
-  - key control, read live from Turnkey: the vault's users, root quorum, policies; the sign-up user's one policy;
-  - solvency: on-chain vault balances against ledger totals;
-  - signing history: the vault's Turnkey activities;
-  - live checks, each showing Turnkey's refusal and its activity ID: vault signer tries to export the wallet; vault signer tries another network (e.g. mainnet); sign-up key tries to add a policy or sign with Will's own wallet (shows in the main org's log); replay of a used request (Crossroads' own check). Confirm the export refusal on a throwaway vault first. Never demo anything with the vault admin: it is root and would succeed.
-- [ ] Aave "can supply, can never borrow" policy and a refused-borrow live check (Will: yes, Sept 28):
-  - vault admin uploads Aave v3 Pool's ABI as a Turnkey smart contract interface (docs.turnkey.com/concepts/policies/smart-contract-interfaces), then adds signer policies: allow `supply`/`withdraw` on the Pool only on behalf of a vault address (eth.tx.contract_call_args); allow ERC-20 `approve` only with the Pool as spender; an explicit DENY on `borrow` so a named rule shows in the dashboard. Turnkey's Yield.xyz cookbook does nearly this.
-  - proof-page live check: the signer asks Turnkey to sign a Pool `borrow` and is refused by that policy (free; nothing goes on-chain).
-  - addresses: Aave v3 Sepolia is the official test market (app.aave.com, testnet mode, Faucet tab); Base Sepolia Pool 0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27 (per Coinbase CDP docs). Confirm the Sepolia Pool, the WETH gateway (for supplying native ETH) and aToken addresses from Aave's address book before building.
-- [ ] One real Aave supply from the vault (Will: yes, Sept 28): supply a small amount of ETH through Aave's WETH gateway from a vault address, show a growing "earning" balance, and include the supplied amount (read from Aave) in the proof page's solvency check. Costs a couple of Turnkey signatures plus gas; test on local chains first where possible. Decided Sept 28: pooled supply with per-user shares (see the UI plan below).
-- [ ] DeFi UI plan (decided Sept 28), so it feels like an exchange's Earn feature, not a DeFi console:
-  1. an Earn tab beside Swap, Send and Withdraw: the live Aave rate (labeled testnet), an amount, Start earning / Stop earning; the balances table gets an Earning column beside Available and Pending that visibly ticks up;
-  2. the "What just happened" card carries the Turnkey story, and its key step is Turnkey decoding the call: "Aave supply, 0.02 ETH, on behalf of vault address #N, allowed by 'Vault signer: Aave supply and withdraw only'";
-  3. no borrow button on the trading screen: one plain line on the Earn tab ("Crossroads can supply your funds to Aave but can never borrow against them. Turnkey enforces this.") linking to the proof page, where the refused-borrow live check runs;
-  4. pooled supply from whichever vault address holds the funds, with each user's share tracked on the ledger and interest split by share. Safe because the vault can never borrow, so the position cannot be liquidated; that is the point for Bryce: the Turnkey policy is what makes pooling user funds in DeFi safe;
-  5. walkthrough order for the call: sign in, deposit, send, swap (ledger), Earn (on-chain, decoded policy), withdraw (within the cap), the over-limit refusal, then the proof page (key control, then the live checks: export, wrong network, borrow, sign-up key).
-- [ ] Base Sepolia and swaps (Phase 4): needs about 0.1 Base Sepolia ETH from Will, LIQUIDITY_PROVIDER set to his account ID in the live settings (added liquidity cannot be withdrawn), pool seeding, one real end-to-end check.
+- [ ] Deploy once, a day before the call (needs about 200 TEST in the deploy wallet 0xd3bac6427A4702aCb3d6Ae3107402BE223c924C3; it holds 19.9 on Sept 28; 5 TEST per hour). The machine lapsed on Sept 26, so the deploy rents a new one with a new address: Will adds it to the Google client's Authorized JavaScript origins. On first start the app updates the live vault's rules: four per-network withdrawal rules replace the old two, four Aave rules and four contract interfaces are added. These exact rules were checked on a throwaway vault with `npm run turnkey:rules` (free). If Turnkey still refuses them, the vault keeps its old rules and the proof page shows the problem.
+- [ ] Live run on the new machine (Will):
+  1. sign in as William Wendt: he gets vault address #0 back and his 0.1 Sepolia ETH is credited again by its transaction, automatically (RESTORE_ACCOUNTS in compose.yaml); sign in as wil wix (gets #1 back);
+  2. send wil wix 0.01 by account ID or deposit address;
+  3. withdraw 0.01 Sepolia ETH to MetaMask: the first vault-signed withdrawal on a real network, watch it end to end;
+  4. an over-limit withdrawal (0.06 on Sepolia or 0.03 on Base Sepolia): refused by that network's rule;
+  5. deposit about 0.1 Base Sepolia ETH (MetaMask holds 0.15), seed the swap pool with both assets (Add liquidity, William only), one swap;
+  6. Earn: start with 0.02 Base ETH, watch Earning tick, then Stop all (first stop takes two vault signatures: approve, then withdraw);
+  7. proof page: all five live checks refused, solvency Covered on both networks.
 - [ ] Recorded rehearsal (the backup if anything fails live), then keep the machine topped up through the call (5 TEST per hour, about 120 per day).
-- [ ] Billing check (Will): Turnkey's usage page. Expected roughly 5 completed signatures so far (2 in T02; in T03 the browser signing check, the seal test's 0.01, and the request behind Will's refused 0.07); refusals should not count.
+- [ ] Billing check (Will): Turnkey's usage page. Roughly 6 completed signatures before T04, plus 1 in T04 (the throwaway-vault check that a withdrawal still signs alongside the Aave rules); refusals do not count. The full run, rehearsal and call need roughly 5 to 7 each, so add the pay-as-you-go card before the rehearsal.
 
 ## Later / optional
 
@@ -44,7 +24,8 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 - [ ] Account data readable only by the account's own wallet (today anyone with an account ID can read its balances and history).
 - [ ] A keyed network provider (Alchemy, free) as the primary, public ones as second opinions.
 - [ ] Withdraw from a vault address other than the user's own, to break the deposit-to-withdrawal link on-chain.
-- [ ] Tidy Will's Turnkey org (his call): Test_Policy, throwaway sub-orgs (T02 vault, T03 local-test vault, two browser-signing checks, the sealed test vault), the CryptoSwim test user.
+- [ ] Tidy Will's Turnkey org (his call): Test_Policy, throwaway sub-orgs (T02 vault, T03 local-test vault, two browser-signing checks, the sealed test vault, T04 rules-check vault 059a8863), the CryptoSwim test user.
+- [ ] Send by email (Will's call, open): lookup reveals only the recipient's display name, and only during a real send.
 - [ ] Solana as a third asset (one vault address plus a policy).
 - [ ] Rebalancing between vault addresses when one runs short.
 - [ ] A withdrawal whose transaction is dropped stays locked until a later withdrawal uses the same vault address; add a rebroadcast or timeout if it ever happens in practice.
@@ -52,6 +33,8 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 - [ ] Reading the live machine's logs from the workspace: `oasis rofl machine logs` asks for a passphrase interactively and fails with EOF. Find the non-interactive form if logs are needed.
 
 ## Done
+
+- [x] T04 (Sept 28): expired Google sign-in returns to Continue with Google; Send checks the recipient before signing and accepts a deposit address; dashboard-style activity IDs; restore of earlier deposit addresses and deposits after a machine move; per-network limits (0.05 Sepolia, 0.02 Base Sepolia) with withdrawals limited to plain ETH transfers (21,000 gas); withdrawals to contracts or smart accounts refused before signing; Base's L1 data fee charged; proof page with five live checks; Earn on Base Sepolia (Sepolia's WETH market paid 0%): pooled Aave supply with per-user shares, never-borrow rule; every rule checked on real Turnkey (throwaway vault 059a8863). 60 tests.
 
 - [x] T03 (Sept 24): GitHub Actions deploys (deploy / top-up / status) and Crossroads live on ROFL testnet; one Withdraw button; Google sign-in (one Turnkey wallet per user, browser session key signs each request); Phase 3: keys from ROFL's key service, the app creates its own Turnkey vault with its sign-up key and finds it again by its admin key; real vault live; deposits no longer skipped when the second provider is down, plus crediting a missed deposit by its transaction; demo annotations (key names, activity IDs, policy names, "What just happened" card); vault lock tested on a throwaway vault. 35 tests.
 

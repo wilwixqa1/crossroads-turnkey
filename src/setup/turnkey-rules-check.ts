@@ -1,15 +1,20 @@
 /**
  * Check the vault signer's rules against real Turnkey, for free.
  *
- * Creates (once) a throwaway vault in Will's organization with the app's real rules, adds a rule that refuses every
- * signature, then asks the signer to sign a list of allowed and forbidden transactions and prints Turnkey's own
- * verdict for each rule (getPolicyEvaluations). Everything is refused, so no signature is spent, yet the verdicts
- * show which rule would have allowed or denied each one. Run after changing any rule, before deploying.
+ * Creates a throwaway vault in Will's organization (named "Throwaway: ...") with the app's real rules, adds a rule
+ * that refuses every signature, then asks the signer to sign a list of allowed and forbidden transactions and prints
+ * Turnkey's own verdict for each rule (getPolicyEvaluations). Everything is refused, so no signature is spent, yet
+ * the verdicts show which rule would have allowed or denied each one. Run after changing any rule, before deploying.
+ *
+ * NEXT PERSON: the throwaway vault is deleted at the end (Will does not want unexplained sub-orgs in his
+ * organization). Only a sub-org's own root key can delete it, so never discard these laptop keys before the delete;
+ * KEEP_THROWAWAY=1 keeps it for a follow-up run.
  *
  * Settings: TURNKEY_ORG_ID, TURNKEY_API_PUBLIC_KEY, TURNKEY_API_PRIVATE_KEY (Will's key), RULES_CHECK_DIR (where the
  * throwaway vault's laptop keys live; default data/rules-check).
  * Run: npm run turnkey:rules
  */
+import { rmSync } from "node:fs";
 import { encodeFunctionData, parseEther, serializeTransaction, getAddress, type TransactionSerializable, type Hex } from "viem";
 import { generateP256KeyPair } from "@turnkey/crypto";
 import { turnkeyClient, vaultSubOrgParams, TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, writeVaultOrgId } from "../signer/turnkey.js";
@@ -90,3 +95,9 @@ try {
 }
 const { activities: ex } = await admin.getActivities({ organizationId: org, filterByType: ["ACTIVITY_TYPE_EXPORT_WALLET"], paginationOptions: { limit: "1" } });
 console.log("export activity:", ex[0]?.id, ex[0]?.status);
+
+if (process.env.KEEP_THROWAWAY !== "1") {
+  await admin.deleteSubOrganization({ organizationId: org, deleteWithoutExport: true });
+  rmSync(dir, { recursive: true, force: true });
+  console.log(`deleted the throwaway vault ${org}`);
+}

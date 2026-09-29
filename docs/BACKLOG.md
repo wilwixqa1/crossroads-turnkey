@@ -24,7 +24,7 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 - [ ] Account data readable only by the account's own wallet (today anyone with an account ID can read its balances and history).
 - [ ] A keyed network provider (Alchemy, free) as the primary, public ones as second opinions.
 - [ ] Withdraw from a vault address other than the user's own, to break the deposit-to-withdrawal link on-chain.
-- [ ] Tidy Will's Turnkey org (his call): Test_Policy, throwaway sub-orgs (T02 vault, T03 local-test vault, two browser-signing checks, the sealed test vault, T04 rules-check vault 059a8863), the CryptoSwim test user.
+- [ ] Tidy Will's Turnkey org (his call): Test_Policy and the CryptoSwim test user. Five old test sub-orgs cannot be deleted or renamed by anyone, since only a sub-org's own root key can and those keys were discarded: T02 vault b27be120, T03 local-test vault db7ddd37, browser checks 15cda38f and c650228a, sealed test vault aa1cb620. All hold nothing (checked Sept 28). Turnkey support may be able to remove them. The T04 rules-check vault was deleted.
 - [ ] Send by email (Will's call, open): lookup reveals only the recipient's display name, and only during a real send.
 - [ ] Solana as a third asset (one vault address plus a policy).
 - [ ] Rebalancing between vault addresses when one runs short.
@@ -34,7 +34,7 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 
 ## Done
 
-- [x] T04 (Sept 28): expired Google sign-in returns to Continue with Google; Send checks the recipient before signing and accepts a deposit address; dashboard-style activity IDs; restore of earlier deposit addresses and deposits after a machine move; per-network limits (0.05 Sepolia, 0.02 Base Sepolia) with withdrawals limited to plain ETH transfers (21,000 gas); withdrawals to contracts or smart accounts refused before signing; Base's L1 data fee charged; proof page with five live checks; Earn on Base Sepolia (Sepolia's WETH market paid 0%): pooled Aave supply with per-user shares, never-borrow rule; every rule checked on real Turnkey (throwaway vault 059a8863). 60 tests.
+- [x] T04 (Sept 28): expired Google sign-in returns to Continue with Google; Send checks the recipient before signing and accepts a deposit address; dashboard-style activity IDs; restore of earlier deposit addresses and deposits after a machine move; per-network limits (0.05 Sepolia, 0.02 Base Sepolia) with withdrawals limited to plain ETH transfers (21,000 gas); withdrawals to contracts or smart accounts refused before signing; Base's L1 data fee charged; proof page with five live checks; Earn on Base Sepolia (Sepolia's WETH market paid 0%): pooled Aave supply with per-user shares, never-borrow rule; every rule checked on real Turnkey (a throwaway vault, deleted afterwards). 60 tests.
 
 - [x] T03 (Sept 24): GitHub Actions deploys (deploy / top-up / status) and Crossroads live on ROFL testnet; one Withdraw button; Google sign-in (one Turnkey wallet per user, browser session key signs each request); Phase 3: keys from ROFL's key service, the app creates its own Turnkey vault with its sign-up key and finds it again by its admin key; real vault live; deposits no longer skipped when the second provider is down, plus crediting a missed deposit by its transaction; demo annotations (key names, activity IDs, policy names, "What just happened" card); vault lock tested on a throwaway vault. 35 tests.
 

@@ -44,3 +44,9 @@ Session updates and context files describe what changed and what it means for Wi
 ## Configuration
 
 `.env` is never committed. `.env.example` lists every setting. In ROFL the same settings become ROFL secrets. The vault's Turnkey keys are generated inside the enclave and never appear in any file.
+
+## Will's Turnkey organization
+
+- Anything created only to test (a vault, a user, a policy) is named starting "Throwaway:" and deleted when the test is done. Will does not want sub-orgs or policies he cannot explain.
+- Only a sub-org's own root key can delete or rename it; Will's key cannot. Delete a throwaway vault before its laptop keys are lost (they vanish with the workspace).
+- Never touch the live vault (f5597296…) or the users' sub-orgs with test tooling.

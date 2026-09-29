@@ -1,19 +1,29 @@
-// Throwaway vault: create it with the real rules, add a refuse-everything rule, and read Turnkey's own verdict for
-// every rule on each attempt. Every attempt is refused, so no signature is spent.
+/**
+ * Check the vault signer's rules against real Turnkey, for free.
+ *
+ * Creates (once) a throwaway vault in Will's organization with the app's real rules, adds a rule that refuses every
+ * signature, then asks the signer to sign a list of allowed and forbidden transactions and prints Turnkey's own
+ * verdict for each rule (getPolicyEvaluations). Everything is refused, so no signature is spent, yet the verdicts
+ * show which rule would have allowed or denied each one. Run after changing any rule, before deploying.
+ *
+ * Settings: TURNKEY_ORG_ID, TURNKEY_API_PUBLIC_KEY, TURNKEY_API_PRIVATE_KEY (Will's key), RULES_CHECK_DIR (where the
+ * throwaway vault's laptop keys live; default data/rules-check).
+ * Run: npm run turnkey:rules
+ */
 import { encodeFunctionData, parseEther, serializeTransaction, getAddress, type TransactionSerializable, type Hex } from "viem";
 import { generateP256KeyPair } from "@turnkey/crypto";
-import { turnkeyClient, vaultSubOrgParams, TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, writeVaultOrgId } from "./src/signer/turnkey.js";
-import { withdrawalLimits } from "./src/chains/config.js";
-import { AAVE_MARKETS, POOL_ABI, GATEWAY_ABI, ERC20_ABI, DEBT_TOKEN_ABI } from "./src/chains/aave.js";
+import { turnkeyClient, vaultSubOrgParams, TurnkeyVault, loadOrCreateAppKeys, readVaultOrgId, writeVaultOrgId } from "../signer/turnkey.js";
+import { withdrawalLimits } from "../chains/config.js";
+import { AAVE_MARKETS, POOL_ABI, GATEWAY_ABI, ERC20_ABI, DEBT_TOKEN_ABI } from "../chains/aave.js";
 
-const dir = "/tmp/cr1/probe";
+const dir = process.env.RULES_CHECK_DIR ?? "data/rules-check";
 const parentOrg = process.env.TURNKEY_ORG_ID!;
 const parent = turnkeyClient({ publicKey: process.env.TURNKEY_API_PUBLIC_KEY!, privateKey: process.env.TURNKEY_API_PRIVATE_KEY! }, parentOrg);
 const keys = loadOrCreateAppKeys(dir);
 let org = readVaultOrgId(dir);
 if (!org) {
   const p = vaultSubOrgParams(parentOrg, keys.admin.publicKey);
-  const res = await parent.createSubOrganization({ ...p, subOrganizationName: `Throwaway: rules test ${new Date().toISOString().slice(0, 16).replace("T", " ")}` });
+  const res = await parent.createSubOrganization({ ...p, subOrganizationName: `Throwaway: Crossroads rules check ${new Date().toISOString().slice(0, 16).replace("T", " ")}` });
   org = res.subOrganizationId;
   writeVaultOrgId(dir, org);
   console.log("created throwaway vault", org);

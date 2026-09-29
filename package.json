@@ -12,6 +12,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p web/tsconfig.json",
     "turnkey:setup": "tsx --env-file-if-exists=.env src/setup/turnkey-setup.ts",
+    "turnkey:rules": "tsx src/setup/turnkey-rules-check.ts",
     "turnkey:check": "tsx --env-file-if-exists=.env src/setup/turnkey-check.ts",
     "turnkey:signup-setup": "tsx --env-file-if-exists=.env src/setup/signup-setup.ts"
   },

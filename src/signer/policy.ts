@@ -72,9 +72,10 @@ export function signerPolicies(signerUserId: string, walletId: string, limits: C
     });
   }
   // NEXT PERSON: Turnkey's policy engine does not short-circuit, and reading an argument the call does not have (say
-  // 'spender' on depositETH) makes the whole policy evaluate to an error. An error neither allows nor denies (tested
-  // on a throwaway vault Sept 28: a plain transfer still signed while these three errored). So each allow names one
-  // function and reads only that function's arguments, and the deny reads no arguments: a deny that errors is ignored.
+  // 'spender' on depositETH) makes the whole policy evaluate to an error. An erroring allow does not allow, and does
+  // not block a signature another rule allows (tested on a throwaway vault Sept 28). An erroring deny would not apply
+  // either, by Turnkey's documented evaluation order (untested). So each allow names one function and reads only that
+  // function's arguments, and the deny reads no arguments at all.
   for (const m of aave) {
     const fn = (name: string) => `eth.tx.function_name == '${name}'`;
     const arg = (name: string) => `eth.tx.contract_call_args['${name}']`;

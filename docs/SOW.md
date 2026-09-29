@@ -2,7 +2,7 @@
 
 > Snapshot of the living Scope of Work. The editable version is a Claude Doc (link in docs/sessions/T01_CONTEXT.md). Re-export here at each session close-out so the repo copy never drifts far.
 
-Sep 28, 2026 · @Will (Claude Doc rev 85)
+Sep 28, 2026 · @Will (Claude Doc rev 86)
 
 ## Purpose and success criteria
 
@@ -116,7 +116,7 @@ A flat per-withdrawal cap is for the demo: it shows in one move that Turnkey enf
 
 **Checked on real Turnkey (Sept 28).** Every rule was tested on a throwaway vault, since deleted. A refuse-everything rule was added, then the signer asked for each allowed and forbidden transaction, and Turnkey's own per-rule verdicts were read back. Each came out as intended at no cost; one real signature confirmed a normal withdrawal still signs. What the tests showed about Turnkey's policy engine:
 
-- It checks every clause of a rule, even after one fails. A rule that reads an argument its call lacks errors, and an erroring rule neither allows nor denies. So each Aave allow names one function and reads only its arguments, and the never-borrow deny reads no arguments at all.
+- It checks every clause of a rule, even after one fails. A rule that reads an argument its call lacks errors. An erroring rule does not allow, and an erroring allow does not block a signature that another rule allows (tested). By Turnkey's documented evaluation order an erroring deny would not apply either (not tested). So each Aave allow names one function and reads only its arguments, and the never-borrow deny reads no arguments at all.
 - Rule names must be unique.
 - Addresses compare the same in any capitalization.
 - An uploaded contract interface must name every parameter, including unnamed return values.

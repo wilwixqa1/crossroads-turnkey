@@ -4,6 +4,7 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 
 ## Next up
 
+- [ ] The Bryce call is Thursday Oct 1 (time to confirm with Will). Deploy Tuesday Sept 29 when Will can do the live run right after, rehearse Wednesday.
 - [ ] Deploy once, a day before the call (needs about 200 TEST in the deploy wallet 0xd3bac6427A4702aCb3d6Ae3107402BE223c924C3; it holds 19.9 on Sept 28; 5 TEST per hour). The machine lapsed on Sept 26, so the deploy rents a new one with a new address: Will adds it to the Google client's Authorized JavaScript origins. On first start the app updates the live vault's rules: four per-network withdrawal rules replace the old two, four Aave rules and four contract interfaces are added. These exact rules were checked on a throwaway vault with `npm run turnkey:rules` (free). If Turnkey still refuses them, the vault keeps its old rules and the proof page shows the problem.
 - [ ] Live run on the new machine (Will):
   1. sign in as William Wendt: he gets vault address #0 back and his 0.1 Sepolia ETH is credited again by its transaction, automatically (RESTORE_ACCOUNTS in compose.yaml); sign in as wil wix (gets #1 back);
@@ -13,6 +14,8 @@ Actionable work only, roughly in order. Facts that are not work live as comments
   5. deposit about 0.1 Base Sepolia ETH (MetaMask holds 0.15), seed the swap pool with both assets (Add liquidity, William only), one swap;
   6. Earn: start with 0.02 Base ETH, watch Earning tick, then Stop all (first stop takes two vault signatures: approve, then withdraw);
   7. proof page: all five live checks refused, solvency Covered on both networks.
+- [ ] After the live run: delete the "deposits" list from RESTORE_ACCOUNTS in compose.yaml once William's 0.1 shows credited (a later empty ledger would credit it again from the same transaction).
+- [ ] Solana, only if the live run is clean (Will asked Sept 29): SOL deposits and withdrawals only, no swap or Earn. A Solana account per user in the vault wallet, deposits found per deposit address, withdrawals signed as Solana transactions under a solana.tx rule (amount limit, System Program transfer only), a third balances row. Test on a local Solana chain, deploy Wednesday morning; if it is not solid by Wednesday noon, it stays the closing talking point.
 - [ ] Recorded rehearsal (the backup if anything fails live), then keep the machine topped up through the call (5 TEST per hour, about 120 per day).
 - [ ] Billing check (Will): Turnkey's usage page. Roughly 6 completed signatures before T04, plus 1 in T04 (the throwaway-vault check that a withdrawal still signs alongside the Aave rules); refusals do not count. The full run, rehearsal and call need roughly 5 to 7 each, so add the pay-as-you-go card before the rehearsal.
 
@@ -26,7 +29,6 @@ Actionable work only, roughly in order. Facts that are not work live as comments
 - [ ] Withdraw from a vault address other than the user's own, to break the deposit-to-withdrawal link on-chain.
 - [ ] Tidy Will's Turnkey org (his call): Test_Policy and the CryptoSwim test user. Five old test sub-orgs cannot be deleted or renamed by anyone, since only a sub-org's own root key can and those keys were discarded: T02 vault b27be120, T03 local-test vault db7ddd37, browser checks 15cda38f and c650228a, sealed test vault aa1cb620. All hold nothing (checked Sept 28). Turnkey support may be able to remove them. The T04 rules-check vault was deleted.
 - [ ] Send by email (Will's call, open): lookup reveals only the recipient's display name, and only during a real send.
-- [ ] Solana as a third asset (one vault address plus a policy).
 - [ ] Rebalancing between vault addresses when one runs short.
 - [ ] A withdrawal whose transaction is dropped stays locked until a later withdrawal uses the same vault address; add a rebroadcast or timeout if it ever happens in practice.
 - [ ] Under the hood history lives in memory and clears on restart; persist it if rehearsals need it.

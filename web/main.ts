@@ -443,6 +443,8 @@ function renderLatest() {
 
 // ---------- action panel ----------
 
+const earnRateText = (e: { ratePercent: number | null }) => (e.ratePercent === null ? "Reading…" : `${e.ratePercent.toFixed(2)}% a year (testnet)`);
+
 /** The Earn tab: pooled Aave supply from the vault, with the rule that makes it safe stated plainly. */
 function earnPanel(): string {
   const entry = Object.entries(state.status?.earn ?? {})[0] as [Asset, NonNullable<Status["earn"][Asset]>] | undefined;
@@ -451,11 +453,11 @@ function earnPanel(): string {
   const mine = state.view?.earning?.[asset] ?? "0";
   const cap = e.supplyCap ? fmtEth(e.supplyCap, 2) : "";
   return `
-    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${vaultName()}'s policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated.</p>
+    <p>Earn interest on your ${ASSET_NAMES[asset]}. Crossroads pools it with other users' and supplies it to Aave on ${esc(e.network)} from the vault. ${state.status?.mode === "turnkey" ? "Turnkey's" : "The vault's"} policy lets the vault supply and withdraw, and never borrow, so pooled funds can never be liquidated.</p>
     <dl class="facts">
       <div><dt>You are earning on</dt><dd class="num earning" id="earn-mine">${fmtEth(mine, 10)} ${ASSET_NAMES[asset]}</dd></div>
-      <div><dt>Aave's rate now</dt><dd>${e.ratePercent === null ? "Reading…" : `${e.ratePercent.toFixed(2)}% a year (testnet)`}</dd></div>
-      <div><dt>Vault's pooled supply</dt><dd>${fmtEth(e.supplied, 6)} ${ASSET_NAMES[asset]}</dd></div>
+      <div><dt>Aave's rate now</dt><dd id="earn-rate">${earnRateText(e)}</dd></div>
+      <div><dt>Vault's pooled supply</dt><dd id="earn-pool">${fmtEth(e.supplied, 6)} ${ASSET_NAMES[asset]}</dd></div>
     </dl>
     <form id="f-earn-start" novalidate>
       <input type="hidden" name="asset" value="${asset}">
@@ -574,6 +576,11 @@ function renderHints() {
   const mine = $("#earn-mine");
   const earnAsset = Object.keys(state.status?.earn ?? {})[0] as Asset | undefined;
   if (mine && earnAsset) mine.textContent = `${fmtEth(state.view?.earning?.[earnAsset] ?? "0", 10)} ${ASSET_NAMES[earnAsset]}`;
+  const e = earnAsset ? state.status?.earn[earnAsset] : undefined;
+  const rate = $("#earn-rate");
+  if (rate && e) rate.textContent = earnRateText(e);
+  const pool = $("#earn-pool");
+  if (pool && e && earnAsset) pool.textContent = `${fmtEth(e.supplied, 6)} ${ASSET_NAMES[earnAsset]}`;
   const start = $<HTMLFormElement>("#f-earn-start");
   const hint = start?.querySelector("[data-hint=available]");
   if (hint && earnAsset) hint.textContent = `Available: ${fmtEth(available(earnAsset))} ${ASSET_NAMES[earnAsset]}`;

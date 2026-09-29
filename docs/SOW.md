@@ -2,7 +2,7 @@
 
 > Snapshot of the living Scope of Work. The editable version is a Claude Doc (link in docs/sessions/T01_CONTEXT.md). Re-export here at each session close-out so the repo copy never drifts far.
 
-Sep 24, 2026 · @Will (Claude Doc rev 75)
+Sep 28, 2026 · @Will (Claude Doc rev 85)
 
 ## Purpose and success criteria
 
@@ -104,13 +104,24 @@ Turnkey is set up two ways. Each user gets a standard embedded wallet: a sub-org
 
 **Signer policies** (Turnkey denies anything not explicitly allowed):
 
-- Sign Ethereum transactions only from the vault wallet and only on Sepolia (chain 11155111) or Base Sepolia (chain 84532), following Turnkey's [policy examples](https://docs.turnkey.com/concepts/policies/examples).
-- Cap each withdrawal per network: 0.05 ETH on Sepolia, 0.02 ETH on Base Sepolia (decided Sept 24; the live vault has the single 0.05 ETH cap until the app replaces its policies).
+- **Withdrawals, per network:** a plain ETH transfer from the vault wallet, up to that network's limit: 0.05 ETH on Sepolia (chain 11155111), 0.02 ETH on Base Sepolia (chain 84532). Plain means capped at 21,000 gas, so the transaction cannot call any contract, following Turnkey's [policy language](https://docs.turnkey.com/concepts/policies/language).
+- **Circuit breakers:** a deny per network on anything worth more than its limit. A deny beats any allow, so it holds even if the app itself asks.
+- **Aave on Base Sepolia:** supply ETH through Aave's gateway only on behalf of the vault address making the call; withdraw only back to that address; approve only Aave's gateway to take the vault's aWETH back. The vault uploads Aave's [contract interfaces](https://docs.turnkey.com/concepts/policies/smart-contract-interfaces) so Turnkey can read each call's function and arguments.
+- **Never borrow:** an explicit deny on every way to open debt on Aave: borrow, flash loans, borrowing through the gateway, and credit delegation.
 - Nothing else: no key export, no new users, no policy changes.
 
 The caps are a circuit breaker. Even if the app had a bug, Turnkey itself would refuse a withdrawal above the limit.
 
 A flat per-withdrawal cap is for the demo: it shows in one move that Turnkey enforces a rule the app cannot override. In production the check that users only withdraw what they own is the ledger's canSign step, and the Turnkey backstop would be a spending limit over time (Turnkey lists a velocity-control feature, untested), so a bad app version could only drain slowly.
+
+**Checked on real Turnkey (Sept 28).** Every rule was tested on a throwaway vault, since deleted. A refuse-everything rule was added, then the signer asked for each allowed and forbidden transaction, and Turnkey's own per-rule verdicts were read back. Each came out as intended at no cost; one real signature confirmed a normal withdrawal still signs. What the tests showed about Turnkey's policy engine:
+
+- It checks every clause of a rule, even after one fails. A rule that reads an argument its call lacks errors, and an erroring rule neither allows nor denies. So each Aave allow names one function and reads only its arguments, and the never-borrow deny reads no arguments at all.
+- Rule names must be unique.
+- Addresses compare the same in any capitalization.
+- An uploaded contract interface must name every parameter, including unnamed return values.
+
+On every start the app makes the signer's rules match this list, creating new ones before deleting old ones. If Turnkey refuses the change, the vault keeps its old rules and the proof page shows the problem.
 
 **Vault lock (tested Sept 24, not applied).** Three calls, made by the admin key from inside the app: the signer gets permission to add deposit addresses to the vault wallet; a second root user is created whose key is thrown away; the root quorum becomes 2 of those two. On a throwaway vault, the admin's attempts to add a policy, export the wallet, add a user, or undo the lock all sat at "Consensus needed" forever; the signer still added an address and signed 0.01 ETH, and 0.06 was still refused. Irreversible: a locked vault can never change its cap or chains. Will chose to wait. It freezes the rules but not the signer, so a malicious upgrade could still withdraw within the rules.
 
@@ -174,16 +185,16 @@ It also keeps a list of deposits already credited, so none counts twice, the nex
 
 **Withdrawals**, following the Crossroads lock, check, confirm sequence:
 
-1. The user signs a request naming the chain, amount, and destination address.
+1. The user signs a request naming the chain, amount, and destination address. Before anything is signed, the page checks the destination is a plain wallet: a plain transfer cannot reach a contract or a smart account (including a wallet upgraded with EIP-7702).
 2. The app moves the amount plus an estimated network fee from Available to Pending.
 3. The app picks a vault address on that chain holding enough funds, the user's own deposit address first.
 4. The app builds the transaction using that address's current transaction number on that chain. Withdrawals from different addresses run in parallel; Crossroads needs a one-at-a-time rule only because its users broadcast for themselves.
 5. The app asks Turnkey, using the signer key, to sign it. Turnkey checks its policies before signing.
-6. The app broadcasts the transaction, waits for confirmation, clears Pending, and refunds any unused fee.
+6. The app broadcasts the transaction, waits for confirmation, clears Pending, and refunds any unused fee. The fee charged is what the chain really took, including Base's L1 data fee; a transaction that reverts still charges the fee it used.
 
 Because the app broadcasts immediately and each signature is tied to the current transaction number, no one can collect a signature now and use it later.
 
-**Solvency check.** After every change, the app adds up the real on-chain balances of every vault address and compares the total with everyone's Available and Pending combined. On-chain funds must always cover the ledger. The proof screen shows both numbers.
+**Solvency check.** The app adds up the real on-chain balances of every vault address, plus the vault's aWETH on Aave, and compares the total with everyone's Available, Pending and Earning combined. On-chain funds must always cover the ledger. The proof screen shows both numbers, and the exact shortfall if there ever is one.
 
 **Saved state.** The ledger is written to ROFL's encrypted persistent storage after every change, which survives restarts and app upgrades. Network provider addresses are stored as ROFL secrets. There are no Turnkey credentials anywhere outside the enclave.
 
@@ -199,7 +210,7 @@ Six flows, each short enough to show live. Only deposits and withdrawals touch a
 
 **Transfer to another user**
 
-1. The user enters a recipient's account address and an amount, then confirms. Their Turnkey wallet signs the request.
+1. The user enters the recipient's account ID or Crossroads deposit address and an amount. The page shows "Sending to <name>" before anything is signed; an address that is not a Crossroads account is refused before the wallet signs, so a typo costs no Turnkey signature. Their Turnkey wallet then signs the request.
 2. Both balances update immediately. No gas is spent and nothing appears on-chain.
 
 **Swap**
@@ -229,13 +240,21 @@ The user sees three states: Pending, Sent (with an explorer link), and Complete.
 
 **Proof screen**
 
-A single page anyone can open, built for the Bryce conversation. Everything on it is fetched live, not typed in:
+A single page anyone can open, no sign-in, linked from the header (built Sept 28). Everything on it is read live, not typed in:
 
-1. **Attestation:** the ROFL app ID, the exact code version running, and a link to its registration on the Oasis explorer.
-2. **Who controls the keys:** the vault's users (app admin, app signer), its root quorum (app admin only), and the signer's policies, plus the sign-up user's single policy in Will's organization, all read directly from Turnkey.
-3. **Solvency:** the vault's on-chain balances beside the ledger totals.
-4. **Signing history:** recent Turnkey signing activity, each linked to its on-chain transaction.
-5. **Live checks:** buttons that ask for something forbidden and show Turnkey's refusal with its activity ID: the vault signer tries to export the wallet; it tries to sign on a network it is not allowed; the sign-up key tries to add a policy or sign with Will's own wallet (the refusal shows in Will's own Activity Log); and an old request is replayed (Crossroads' own check). Nothing is ever tried with the vault admin, which is root and would succeed.
+1. **The code that holds the keys:** the ROFL app ID with a link to its registration on the Oasis explorer, the enclave identities and container image from the manifest the deploy commits, and where the app's keys come from (ROFL's key service).
+2. **Who controls the vault:** its users and how each signs in, its root quorum (the app admin only, 1 of 1), every signer rule with the exact condition Turnkey checks, and the contract interfaces uploaded for Aave, all read directly from Turnkey.
+3. **The app's reach in Will's organization:** the sign-up user and its single rule.
+4. **Solvency:** on-chain holdings (including the aWETH supplied to Aave) beside what the ledger owes, per network.
+5. **What the vault has signed:** recent Turnkey signing activity, signed or refused, each linked to its on-chain transaction.
+6. **Live checks,** each showing who refused, the rule and the activity ID:
+   1. the vault signer asks Turnkey to export the vault wallet;
+   2. the vault signer asks to sign on Ethereum mainnet, a network it may not use;
+   3. the vault signer asks to borrow against the vault on Aave, refused by the never-borrow rule;
+   4. the sign-up key tries to add a policy to Will's organization (the refusal shows in Will's own Activities);
+   5. the most recent signed request is sent again (Crossroads' own check).
+
+Every check asks for something forbidden, so none costs a signature, and anything it builds uses a transaction number that can never land. Nothing is ever tried with the vault admin, which is root and would succeed.
 
 ## UI and UX
 
@@ -245,12 +264,12 @@ One page for trading, a narration panel beside it, and a separate proof page, de
 
 1. A wallet in seconds, no extension: sign-up is one Google click, and the panel shows "Turnkey created your wallet" with the activity ID before the user has finished reading it.
 2. Keys nobody holds: right after, "Turnkey created your deposit addresses in the vault," also with an activity ID.
-3. Rules enforced outside the app: on each withdrawal the panel shows "Policy check passed: 0.01 ETH under the 0.05 cap. Signed by Turnkey in 0.4 s."
+3. Rules enforced outside the app: on each withdrawal the panel shows "Allowed by 'Vault signer: withdrawals on Sepolia, up to 0.05 ETH' (0.01 ETH, within the 0.05 ETH limit on Sepolia)", with the Turnkey activity ID and how long Turnkey took.
 4. Turnkey saying no: the user types 0.06 ETH into the normal Withdraw form. The app has no limit of its own, so the request reaches Turnkey, which refuses it. The page shows the refusal, and the rejected signature sits in the Turnkey dashboard with the 0.05 ETH policy marked Denied. This is the single strongest moment in the demo, because the limit lives in Turnkey, not in the app.
 5. Two kinds of key, one provider: every trade shows "signed by your wallet," every withdrawal shows "signed by the vault," and the panel names which Turnkey key did each.
 6. A full audit trail: every Turnkey entry names the key that acted and shows its activity ID (click to copy; it matches the dashboard's Activities), withdrawals name the policy that allowed or denied them, on-chain actions link to the explorer, and a "What just happened" card walks through the latest action step by step (built Sept 24).
 
-**Earn through Aave (decided Sept 28, not built).** An Earn tab beside Swap, Send and Withdraw shows the live Aave v3 testnet rate and takes an amount; the balances table gains an Earning column. The vault supplies pooled funds from whichever vault address holds them, and the ledger tracks each user's share and splits interest by share. That is safe because the vault can never borrow, so the position cannot be liquidated. Turnkey enforces it: the vault uploads Aave's contract interface, and the signer's policies allow only supply and withdraw on Aave's pool on behalf of a vault address, approvals only to that pool, and an explicit deny on borrow. The "What just happened" card shows Turnkey decoding the call (function, amount, on behalf of whom) and naming the allowing policy. There is no borrow button on the trading screen: the Earn tab says Crossroads can never borrow against your funds and links to the proof page, whose live check asks the vault to borrow and shows Turnkey's refusal. On-chain Uniswap swaps stay a talking point; the ledger's instant swap covers trading.
+**Earn through Aave (built Sept 28, on Base Sepolia).** Aave's Sepolia WETH market paid 0% on Sept 28 (no borrowers), Base Sepolia's about 2.3% a year, so Earn runs on Base Sepolia. An Earn tab beside Swap, Send and Withdraw shows Aave's live testnet rate, the vault's pooled supply, and the user's own earning balance; the balances table gains an Earning on Aave column that visibly grows. Start earning locks the amount and the vault supplies it to Aave from the vault address holding it, up to 0.02 ETH per supply (the Base Sepolia limit). The ledger gives each user shares priced at the pool's value, so interest splits by share. Stop earning takes part or all of it back; the first time from an address takes two vault signatures (approve Aave's gateway, then withdraw). This is safe because the vault can never borrow, so the position cannot be liquidated, and Turnkey enforces that (see Signer policies). The "What just happened" card shows each call as Turnkey read it (function, amount, on behalf of whom) and the rule that allowed it. There is no borrow button: the Earn tab links to the proof page's borrow check. On-chain Uniswap swaps stay a talking point; the ledger's instant swap covers trading.
 
 **Keeping it simple:** no passwords or extensions (Google is the login), one asset pair, everything on one screen, two demo personas as two Google accounts, deposits made before the call so nothing waits on camera, and no charts or settings. MetaMask appears only as the outside wallet funds come from and go to.
 
@@ -260,24 +279,25 @@ One page for trading, a narration panel beside it, and a separate proof page, de
 | --- | --- |
 | Sign up / log in | A Continue with Google button. Nothing else. |
 | Header | The user's name, network badges (Sepolia, Base Sepolia), a link to the proof page |
-| Balances | Available and Pending for Sepolia ETH and Base ETH, the user's deposit address with a copy button, and the pool's current exchange rate |
-| Action panel | Four tabs: Deposit, Swap, Send, Withdraw. Each shows a plain-language summary, then a confirm button. |
+| Balances | Available, Pending and Earning on Aave for Sepolia ETH and Base ETH, the user's deposit address with a copy button, and the pool's current exchange rate |
+| Action panel | Five tabs: Deposit, Swap, Send, Earn, Withdraw. Each shows a plain-language summary, then a confirm button. |
 | Under the hood | A running log of every Turnkey and blockchain interaction in plain words, with timings and links |
 | Activity feed | Every action, newest first, tagged Instant or On-chain. Instant items show how long settlement took. |
 | Add liquidity | Visible only to Will's account. Moves his deposited ETH on both chains into the swap pool. |
-| Proof page | The four panels described under User flows: attestation, key control, solvency, signing history |
+| Proof page | The six sections described under User flows, ending with the five live checks |
 
 **Style:** light and dark themes, addresses in a monospace font with a copy button, amounts to four decimals, and no jargon on screen ("Waiting for 3 confirmations," not "awaiting block inclusion").
 
-**Bryce walkthrough (about 5 minutes)**
+**Bryce walkthrough (about 6 minutes)**
 
 1. **Framing (30 s):** "This is Crossroads, the design from Ari Juels' group, running on Turnkey instead of a custom signing committee, with Turnkey embedded wallets as the user accounts."
 2. **Sign up (30 s):** create a fresh account with Google and watch the wallet and deposit address appear.
 3. **Deposit (1 min):** deposit 0.01 Sepolia ETH and watch it credit. Base ETH is deposited before the call so there is no waiting on camera.
-4. **Swap and send (1 min):** swap Sepolia ETH for Base ETH, then send some to the second account. Each is one click and settles instantly.
-5. **Withdraw (1 min):** withdraw Base ETH to MetaMask. It arrives in seconds. Then withdraw 0.06 Sepolia ETH, watch Turnkey refuse, and open the rejected signature in the Turnkey dashboard, where the 0.05 ETH policy shows Denied.
-6. **Proof (1 min):** open the proof page. Show that the only key holder for the vault is the attested app, show the signer's policies, then show Will's own Turnkey dashboard failing to sign.
-7. **Close (30 s):** "Move the app from ROFL to Turnkey Verifiable Cloud and the whole thing runs on Turnkey. Solana is one more address in the vault."
+4. **Swap and send (1 min):** swap Sepolia ETH for Base ETH, then send some to the second account by its deposit address. Each is one click and settles instantly.
+5. **Earn (1 min):** start earning with 0.02 Base ETH. The card shows Turnkey reading the Aave call (depositETH, on behalf of the vault address) and the rule that allowed it; the Earning column starts to grow.
+6. **Withdraw (1 min):** withdraw Base ETH to MetaMask. It arrives in seconds. Then withdraw 0.06 Sepolia ETH, watch Turnkey refuse, and open the rejected signature in the Turnkey dashboard, where "never more than 0.05 ETH per withdrawal on Sepolia" shows Denied.
+7. **Proof (1 min):** open the proof page. Show that the only key holder for the vault is the attested app and the signer's rules, then run the live checks: export, wrong network, borrow, sign-up key, replay. Each is refused and names the rule.
+8. **Close (30 s):** "Move the app from ROFL to Turnkey Verifiable Cloud and the whole thing runs on Turnkey. Solana is one more address in the vault."
 
 **Before each demo:** pre-fund a second test account, confirm the ROFL machine rental has hours remaining, check the Turnkey signature count, and make sure the demo account has at least 0.07 Sepolia ETH deposited, so the over-limit withdrawal reaches Turnkey (the app locks the funds before it asks Turnkey to sign).
 
@@ -296,7 +316,7 @@ Eight phases over seven days, with the must-have demo running in ROFL by Sep 28,
 | 4. Base Sepolia and swaps | Base Sepolia deposits and withdrawals from the same addresses, swap pool, add-liquidity tab | A Sepolia-to-Base swap and a Base withdrawal both work in ROFL | Seeds the pool with his own deposits | Sep 29, 2026 |
 | 5. Proof page and rehearsal | Proof page, Under the hood panel polish | Two full walkthroughs run cleanly | Rehearses the walkthrough twice | Sep 30, 2026 |
 
-**Status (Sept 24, session 3).** Phases 0b, 1, 2, 2b and 3 are done and live at https://p8080.m1742.opf-testnet-rofl-9.rofl.app with Google sign-in and the enclave-created Turnkey vault; the 0.07 ETH refusal ran live. Still open: a successful live withdrawal and a send between two accounts; per-network limits; Phase 4's Base Sepolia run and pool seeding (needs Base Sepolia ETH); Phase 5's proof page with live checks (the on-screen annotations are done); a recorded rehearsal.
+**Status (Sept 28, session 4).** Phases 0b through 3 ran live until the machine's paid time ran out on Sept 26 and the provider removed it; the app registration, the enclave keys and the vault survived, the ledger and the web address did not. Session 4 built and tested on local copies of both networks everything left for the call: per-network limits with plain-transfer withdrawals, the proof page with its five live checks, Earn on Base Sepolia, expired sign-in handling, recipient checks before signing, and the restore of William Wendt's earlier deposit address and his 0.1 Sepolia ETH. Every vault rule was checked on real Turnkey. Next: one deploy the day before the call (needs about 200 TEST in the deploy wallet), the live run, a recorded rehearsal, then top-ups through the call.
 
 Phase 3 repeats the Turnkey setup on purpose. The keys used on a laptop in phases 1 and 2 are stand-ins, so a fresh sub-organization is created once the real keys exist inside the enclave.
 
@@ -348,22 +368,27 @@ The biggest schedule risk is Solana, and every risk below has a fallback that st
 | Turnkey API keys use a standard curve and ROFL hands the app raw key material | The app derives a standard Turnkey key from that material; Phase 1 confirms Turnkey accepts it |
 | One network provider is down or slow | Configure three providers per chain and require two to agree |
 | A free public network provider stops answering (rpc.sepolia.org did on Sept 24) | Fallback providers are tried in order and a missed deposit can be credited by its transaction; a free keyed provider (Alchemy) as the primary would be sturdier |
+| Turnkey refuses the new rules when the deploy updates the live vault | The exact rules were checked on a throwaway vault first. If refused anyway, the vault keeps its old rules, withdrawals keep working, and the proof page shows the problem |
+| Aave's Base Sepolia rate drops to 0%, as Sepolia's did | The Earning column stops growing; the supply, the rule that allowed it and the refused borrow still show. Say so plainly on the call |
 
 **Open questions**
 
 - Answered in Phase 1: the parent organization can read the vault but not sign with it (Turnkey refused with an organization mismatch), and the vault has no email or phone, with email recovery disabled.
-- Which exact day is the Bryce call? The phase order already protects an early date.
+- What time is the Bryce call on Sept 30? It sets when to deploy and how many machine hours to buy up front.
 - Do you want to tell James Austgen or Ari about the demo once it runs? It could be a useful conversation in its own right.
 
 **Will's checklist for Phase 0**
 
 - [x] Create a Turnkey account through the dashboard, secured with a passkey, and add a card for pay-as-you-go
 - [x] Get about 0.3 Sepolia ETH from a faucet into MetaMask (some faucets need a small mainnet balance; try more than one)
-- [ ] Get about 0.1 Base Sepolia ETH, from a Base faucet or by bridging some Sepolia ETH through the official Base testnet bridge
+- [x] Get about 0.1 Base Sepolia ETH, from a Base faucet or by bridging some Sepolia ETH through the official Base testnet bridge
 - [x] Get Oasis testnet tokens from faucet.testnet.oasis.io, choosing Sapphire; request several times, aiming for 300 or more
 - [ ] Create a free account with one Ethereum network provider that serves both Sepolia and Base Sepolia
 - [x] Provide a Google sign-in Client ID (reusing the SimpleBlueprints Google client)
 - [x] Send about 150 Oasis testnet tokens to the GitHub deploy wallet (in session 3); nothing is installed locally
+- [ ] Before the deploy: send about 200 more Oasis testnet tokens to the deploy wallet (it held 19.9 on Sept 28; the machine costs 5 an hour)
+- [ ] Before the rehearsal: confirm the pay-as-you-go card is on Turnkey; the live run, rehearsal and call together pass the 25 free signatures
+- [ ] After the deploy: add the new machine's address to the Google client's Authorized JavaScript origins
 - [ ] Record one full rehearsal once the demo runs in ROFL, as the backup
 - [x] Join the TVC waitlist and mention the demo to your Turnkey contact
 
@@ -371,5 +396,6 @@ The biggest schedule risk is Solana, and every risk below has a fallback that st
 
 - [Liquefaction: Privately Liquefying Blockchain Assets](https://arxiv.org/abs/2412.02634) and its [code](https://github.com/key-encumbrance/liquefaction)
 - [Crossroads: A Smart Contract Layer for Chain-Abstracted Assets](https://arxiv.org/abs/2607.06525) and its [code](https://github.com/trate3/crossroads)
-- Turnkey: [root quorum](https://docs.turnkey.com/concepts/users/root-quorum), [policy examples](https://docs.turnkey.com/concepts/policies/examples), [sub-organizations](https://www.turnkey.com/blog/create-sub-orgs-resources-policies), [pricing](https://turnkey.com/pricing)
+- Turnkey: [root quorum](https://docs.turnkey.com/concepts/users/root-quorum), [policy examples](https://docs.turnkey.com/concepts/policies/examples), [policy language](https://docs.turnkey.com/concepts/policies/language), [smart contract interfaces](https://docs.turnkey.com/concepts/policies/smart-contract-interfaces), [Earn](https://docs.turnkey.com/features/transaction-management/earn), [sub-organizations](https://www.turnkey.com/blog/create-sub-orgs-resources-policies), [pricing](https://turnkey.com/pricing)
+- Aave: [official address book](https://github.com/bgd-labs/aave-address-book) (Base Sepolia market addresses, checked Sept 28)
 - Oasis ROFL: [key generation and appd API](https://docs.oasis.io/build/rofl/features/appd), [port proxy](https://docs.oasis.io/build/rofl/features/proxy/), [quickstart](https://docs.oasis.io/build/rofl/quickstart)

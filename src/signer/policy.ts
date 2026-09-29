@@ -163,6 +163,8 @@ function decode(abi: Abi, data?: string): { functionName: string; args: readonly
 }
 
 /** The vault signer's rules as plain code: the same decisions signerPolicies() asks Turnkey to make. */
+// NEXT PERSON: evaluate() and signerPolicies() are one rule set written twice. Change both together, then run
+// npm run turnkey:rules to see Turnkey's own verdicts; the stand-in and the page's explanations follow evaluate().
 export function evaluate(tx: TransactionSerializable, from: string, limits: ChainLimit[], aave: AaveMarket[] = []): Verdict {
   const value = tx.value ?? 0n;
   const limit = limits.find((l) => l.chainId === tx.chainId);

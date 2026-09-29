@@ -49,6 +49,8 @@ export class VaultRefusal extends Error {
  * which the receipt reports separately; leaving it out makes the ledger think the vault holds a few gwei more than
  * it does on every Base transaction, and the proof page's solvency check reads "Short".
  */
+// NEXT PERSON: a local anvil fork of Base Sepolia charges this L1 fee but reports none in the receipt, so the proof
+// page reads Short on laptop runs. Start that fork with --network ethereum; live Base Sepolia reports l1Fee.
 export function feePaid(receipt: { gasUsed: bigint; effectiveGasPrice: bigint; l1Fee?: bigint | null }): bigint {
   return receipt.gasUsed * receipt.effectiveGasPrice + (receipt.l1Fee ?? 0n);
 }

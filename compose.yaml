@@ -13,15 +13,17 @@ services:
       - GOOGLE_CLIENT_ID=295336183237-90umhku3e7jck9tktd5dikc6ru7bc2he.apps.googleusercontent.com
       - TURNKEY_ORG_ID=fa26e2cd-7656-4db6-b26f-3012c3b578e8
       # v2: the ledger restarted when the vault moved from the stand-in to Turnkey (stand-in addresses are not in the vault).
-      - STATE_PATH=/data/v2/state.json
+      # v3: the Sept 29 redeploy left v2's saved ledger unreadable (all zero bytes); the restore list below rebuilt it.
+      - STATE_PATH=/data/v3/state.json
       - PORT=8080
       # Will's account (William Wendt) is the only one that may add liquidity to the swap pool.
       - LIQUIDITY_PROVIDER=0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec
-      # After the Sept 26 machine loss: William Wendt and wil wix get their earlier vault addresses back on sign-in.
-      # William's 0.1 Sepolia ETH deposit was credited again live on Sept 29, and its one-time credit removed from here.
-      # NEXT PERSON: list a deposit here only for a ledger that lost it, and remove it once credited. On any later empty
+      # Rebuilds a lost ledger: each account gets its earlier vault address back on sign-in, and listed deposits are
+      # credited again by their transactions. Written after the Sept 26 machine loss and again for the Sept 29 v3 restart
+      # (Crypto Swim added; no one had moved funds on the ledger between the two).
+      # NEXT PERSON: remove the "deposits" list once William's 0.1 shows credited on the live machine. On any later empty
       # ledger it would be credited again from the same transaction, even if the funds were withdrawn since.
-      - 'RESTORE_ACCOUNTS=[{"account":"0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec","depositAddress":"0x0BeAc0e5b61A8DB1d211BB638f21dFf5AF2bCEA1"},{"account":"0xbac4de4f8241e6340d75affc454953ab50fa203b","depositAddress":"0x0D7Bb399D1FF2138Bc023934b8F462d823CcF0dC"}]'
+      - 'RESTORE_ACCOUNTS=[{"account":"0x03b5af4bc5e7a53cd45fc0001757058c24ccb1ec","depositAddress":"0x0BeAc0e5b61A8DB1d211BB638f21dFf5AF2bCEA1","deposits":[{"asset":"ETH_SEPOLIA","txHash":"0x3024491c812a8b20c1268a16c75bb307a85ea685e7b0c51234eac9c293b1a53b"}]},{"account":"0xbac4de4f8241e6340d75affc454953ab50fa203b","depositAddress":"0x0D7Bb399D1FF2138Bc023934b8F462d823CcF0dC"},{"account":"0xbd98463ca39bb50486f9e913cb5f364d2a62086e","depositAddress":"0xFc82604A1c598bF7Cc0465e7d47B1fCeAA5A0b9a"}]'
     volumes:
       - crossroads-data:/data
       - /run/rofl-appd.sock:/run/rofl-appd.sock

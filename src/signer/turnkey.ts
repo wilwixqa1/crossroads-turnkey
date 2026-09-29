@@ -10,6 +10,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFileDurably } from "../storage/state.js";
 import { join } from "node:path";
 import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 import { generateP256KeyPair, getPublicKey } from "@turnkey/crypto";
@@ -64,8 +65,7 @@ export function readVaultOrgId(dir: string): string | undefined {
 }
 
 export function writeVaultOrgId(dir: string, organizationId: string) {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "turnkey-vault.json"), JSON.stringify({ organizationId }, null, 2) + "\n");
+  writeFileDurably(join(dir, "turnkey-vault.json"), JSON.stringify({ organizationId }, null, 2) + "\n");
 }
 
 /** The vault sub-organization: its only root user is the app's admin key, and it has no email or phone anywhere. */
